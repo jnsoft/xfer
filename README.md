@@ -6,6 +6,8 @@ Command-line tool for data transfer over TCP/UDP
 go test -v ./...
 go run src/main.go
 
-go build -o .bin/app ./src/main.go
-./.bin/app
+go build -o .bin/xfer ./src/main.go
+./.bin/xfer -h
+./.bin/xfer -l
+./.bin/xfer
 ```

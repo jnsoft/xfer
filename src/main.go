@@ -9,7 +9,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
+
+	"github.com/jnsoft/xfer/src/server"
 )
 
 var (
@@ -44,7 +45,7 @@ func main() {
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
-		runServer(addr)
+		server.RunServer(addr, *flagKeep, *flagTimeout)
 		return
 	}
 
@@ -58,14 +59,6 @@ func main() {
 	}
 
 	runClient(target)
-}
-
-func applyTimeout(c net.Conn) {
-	if *flagTimeout <= 0 {
-		return
-	}
-	d := time.Duration(*flagTimeout) * time.Second
-	_ = c.SetDeadline(time.Now().Add(d))
 }
 
 func runClient(target string) {
@@ -98,58 +91,4 @@ func runClient(target string) {
 	}()
 
 	wg.Wait()
-}
-
-func runServer(addr string) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
-		os.Exit(2)
-	}
-	defer ln.Close()
-	fmt.Fprintf(os.Stderr, "listening on %s\n", addr)
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
-			if *flagKeep {
-				continue
-			}
-			break
-		}
-		fmt.Fprintf(os.Stderr, "connection from %s\n", conn.RemoteAddr())
-
-		handleConn(conn)
-
-		if !*flagKeep {
-			break
-		}
-	}
-}
-
-func handleConn(conn net.Conn) {
-	defer conn.Close()
-	applyTimeout(conn)
-
-	// copy conn -> stdout and stdin -> conn
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, conn)
-	}()
-
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(conn, os.Stdin)
-		// when stdin EOF, close write side of connection
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}()
-
-	wg.Wait()
-	fmt.Fprintf(os.Stderr, "connection closed %s\n", conn.RemoteAddr())
 }
