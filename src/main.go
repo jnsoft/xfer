@@ -3,13 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
+	"github.com/jnsoft/xfer/src/client"
 	"github.com/jnsoft/xfer/src/server"
 )
 
@@ -58,37 +56,5 @@ func main() {
 		target = fmt.Sprintf("127.0.0.1:%d", *flagPort)
 	}
 
-	runClient(target)
-}
-
-func runClient(target string) {
-	conn, err := net.Dial("tcp", target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
-		os.Exit(2)
-	}
-	defer conn.Close()
-
-	applyTimeout(conn)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// stdin -> conn
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(conn, os.Stdin)
-		// when stdin EOF, close write side if possible
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}()
-
-	// conn -> stdout
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, conn)
-	}()
-
-	wg.Wait()
+	client.RunClient(target, *flagTimeout)
 }
