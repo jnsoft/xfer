@@ -1,0 +1,29 @@
+{
+    "name": "Go Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "runArgs": [
+        "--network=host",
+        "--name=devc_go",
+        "--privileged"
+    ],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,relabel=private",
+    "workspaceFolder": "/workspace",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "go.gopath": "/go",
+                "go.toolsGopath": "/go"
+            },
+            "extensions": [
+                "golang.go",
+                "ms-vscode.go"
+            ]   
+        }
+    },
+    "forwardPorts": [],
+    "postCreateCommand": "go mod tidy",
+    "remoteUser": "root"
+}
