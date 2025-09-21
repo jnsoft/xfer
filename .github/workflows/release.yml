@@ -29,9 +29,9 @@ jobs:
         [ "$GOOS" = "windows" ] && output="${output}.exe"
         CGO_ENABLED=0 go build -v -o $output ./src/main.go
 
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
-      with:
-        files: xfer-${{ matrix.goos }}-${{ matrix.goarch }}*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #- name: Upload Release Asset
+    #  uses: softprops/action-gh-release@v1
+    #  with:
+    #    files: xfer-${{ matrix.goos }}-${{ matrix.goarch }}*
+    #  env:
+    #    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
