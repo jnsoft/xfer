@@ -26,10 +26,11 @@ func RunClient(target string, timeout int, secure bool, key string) {
 			os.Exit(2)
 		}
 		useConn = secureConn
+		// do not double-close underlying conn; defer closing the wrapper (safe)
 		defer secureConn.Close()
 	}
 
-	connection.ApplyTimeout(conn, timeout)
+	connection.ApplyTimeout(useConn, timeout)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -37,7 +38,7 @@ func RunClient(target string, timeout int, secure bool, key string) {
 	// stdin -> conn
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(conn, os.Stdin)
+		_, _ = io.Copy(useConn, os.Stdin)
 		// when stdin EOF, close write side if possible
 		if cw, ok := useConn.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
@@ -47,7 +48,7 @@ func RunClient(target string, timeout int, secure bool, key string) {
 	// conn -> stdout
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, conn)
+		_, _ = io.Copy(os.Stdout, useConn)
 	}()
 
 	wg.Wait()
