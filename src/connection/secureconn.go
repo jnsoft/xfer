@@ -7,9 +7,10 @@ import (
 	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -90,10 +91,16 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 		return nil, err
 	}
 
+	fmt.Println("Shared key: ", hex.EncodeToString(shared)[0:8]+"...") // for debugging
+
 	// if authKey provided, perform an authentication exchange to prevent MITM.
 	// client sends auth first, server reads and verifies then responds.
 	if authKey != "" {
-		auth := helpers.ComputeAuth([]byte(authKey), shared)
+		auth, err := helpers.ComputeAuth([]byte(authKey), shared, pubBytes, peerPubBytes)
+		fmt.Println("auth: ", hex.EncodeToString(auth)[0:8]+"...") // for debugging
+		if err != nil {
+			return nil, err
+		}
 		if isServer {
 			// server: read client's auth, verify, then send its auth
 			peerAuth, err := helpers.ReadBytesWithLen(conn)
@@ -121,8 +128,15 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 		}
 	}
 
-	// derive 32-byte key via SHA-256(shared)
-	key := sha256.Sum256(shared)
+	// derive AEAD key via HKDF, mixing shared and authKey (if present)
+	var salt []byte
+	if authKey != "" {
+		salt = []byte(authKey)
+	}
+	key, err := helpers.GetHkdfKey(shared, salt, []byte("xfer-v1 key"), 32)
+	if err != nil {
+		return nil, err
+	}
 
 	block, err := aes.NewCipher(key[:])
 	if err != nil {

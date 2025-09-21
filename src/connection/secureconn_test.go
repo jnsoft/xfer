@@ -3,6 +3,7 @@ package connection
 import (
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -15,12 +16,25 @@ type wrapResult struct {
 }
 
 func runWrapAsync(c net.Conn, isServer bool, key string, id string, ch chan<- wrapResult) {
+	_ = c.SetDeadline(time.Now().Add(1000 * time.Millisecond))
 	// WrapWithAE returns *SecureConn which implements net.Conn
 	sc, err := WrapWithAE(c, isServer, key)
+	_ = c.SetDeadline(time.Time{})
 	ch <- wrapResult{conn: sc, err: err, id: id}
 }
 
+func dumpStacks(t *testing.T) {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	t.Logf("=== goroutine stack dump ===\n%s", buf[:n])
+}
+
 func TestSecureConn_NoAuth_RoundTrip(t *testing.T) {
+	go func() {
+		<-time.After(2 * time.Second)
+		dumpStacks(t)
+	}()
+
 	c1, c2 := net.Pipe()
 	defer c1.Close()
 	defer c2.Close()
@@ -168,10 +182,11 @@ func TestSecureConn_WithAuth_MismatchedKeyFails(t *testing.T) {
 	}
 
 	// close any successful wrapped connections
-	if serverRes.conn != nil {
-		_ = serverRes.conn.Close()
-	}
-	if clientRes.conn != nil {
-		_ = clientRes.conn.Close()
-	}
+	/*
+		if serverRes.conn != nil {
+			_ = serverRes.conn.Close()
+		}
+		if clientRes.conn != nil {
+			_ = clientRes.conn.Close()
+		} */
 }
