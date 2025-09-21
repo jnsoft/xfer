@@ -3,7 +3,6 @@ package helpers
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/sha256"
 	"testing"
 )
 
@@ -27,14 +26,27 @@ func TestWriteReadBytesWithLen(t *testing.T) {
 func TestComputeAuth(t *testing.T) {
 	psk := []byte("pre-shared-key")
 	shared := []byte("shared-secret")
+	localPub := []byte("local-pub")
+	peerPub := []byte("peer-pub")
 
-	got := ComputeAuth(psk, shared)
+	got1, err := ComputeAuth(psk, shared, localPub, peerPub)
+	if err != nil {
+		t.Fatalf("ComputeAuth error: %v", err)
+	}
+	got2, err := ComputeAuth(psk, shared, peerPub, localPub)
+	if err != nil {
+		t.Fatalf("ComputeAuth error: %v", err)
+	}
 
-	m := hmac.New(sha256.New, psk)
-	_, _ = m.Write(shared)
-	want := m.Sum(nil)
+	if !hmac.Equal(got1, got2) {
+		t.Fatalf("ComputeAuth not deterministic: got1 != got2")
+	}
+	if len(got1) != 32 {
+		t.Fatalf("ComputeAuth output length = %d, want 32", len(got1))
+	}
 
-	if !hmac.Equal(got, want) {
-		t.Fatalf("ComputeAuth mismatch")
+	got3, _ := ComputeAuth([]byte("other-psk"), shared, localPub, peerPub)
+	if hmac.Equal(got1, got3) {
+		t.Fatalf("ComputeAuth should differ when PSK changes")
 	}
 }

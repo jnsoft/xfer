@@ -67,34 +67,50 @@ func TestSecureConn_NoAuth_RoundTrip(t *testing.T) {
 
 	// client -> server
 	msg1 := []byte("hello from client")
-	n, err := clientRes.conn.Write(msg1)
-	if err != nil {
-		t.Fatalf("client write error: %v", err)
-	}
-	if n != len(msg1) {
-		t.Fatalf("client wrote %d bytes, want %d", n, len(msg1))
-	}
-
-	buf := make([]byte, len(msg1))
-	if _, err := io.ReadFull(serverRes.conn, buf); err != nil {
-		t.Fatalf("server read error: %v", err)
-	}
-	if string(buf) != string(msg1) {
-		t.Fatalf("server got %q want %q", buf, msg1)
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		n, err := clientRes.conn.Write(msg1)
+		if err != nil {
+			t.Errorf("client write error: %v", err)
+		}
+		if n != len(msg1) {
+			t.Errorf("client wrote %d bytes, want %d", n, len(msg1))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, len(msg1))
+		if _, err := io.ReadFull(serverRes.conn, buf); err != nil {
+			t.Errorf("server read error: %v", err)
+		}
+		if string(buf) != string(msg1) {
+			t.Errorf("server got %q want %q", buf, msg1)
+		}
+	}()
+	wg.Wait()
 
 	// server -> client
 	msg2 := []byte("reply from server")
-	if _, err := serverRes.conn.Write(msg2); err != nil {
-		t.Fatalf("server write error: %v", err)
-	}
-	buf2 := make([]byte, len(msg2))
-	if _, err := io.ReadFull(clientRes.conn, buf2); err != nil {
-		t.Fatalf("client read error: %v", err)
-	}
-	if string(buf2) != string(msg2) {
-		t.Fatalf("client got %q want %q", buf2, msg2)
-	}
+    wg.Add(2)
+    go func() {
+        defer wg.Done()
+        if _, err := serverRes.conn.Write(msg2); err != nil {
+            t.Errorf("server write error: %v", err)
+        }
+    }()
+    go func() {
+        defer wg.Done()
+        buf2 := make([]byte, len(msg2))
+        if _, err := io.ReadFull(clientRes.conn, buf2); err != nil {
+            t.Errorf("client read error: %v", err)
+        }
+        if string(buf2) != string(msg2) {
+            t.Errorf("client got %q want %q", buf2, msg2)
+        }
+    }()
+    wg.Wait()
 
 	_ = serverRes.conn.Close()
 	_ = clientRes.conn.Close()
@@ -181,12 +197,11 @@ func TestSecureConn_WithAuth_MismatchedKeyFails(t *testing.T) {
 		t.Fatalf("expected authentication failure but both handshakes succeeded")
 	}
 
-	// close any successful wrapped connections
-	/*
-		if serverRes.conn != nil {
-			_ = serverRes.conn.Close()
-		}
-		if clientRes.conn != nil {
-			_ = clientRes.conn.Close()
-		} */
+	if serverRes.conn != nil && serverRes.err == nil {
+		_ = serverRes.conn.Close()
+	}
+	if clientRes.conn != nil && clientRes.err == nil {
+		_ = clientRes.conn.Close()
+
+	}
 }
