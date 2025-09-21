@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
-	"io"
 	"testing"
 )
 
@@ -32,7 +31,7 @@ func TestComputeAuth(t *testing.T) {
 	got := ComputeAuth(psk, shared)
 
 	m := hmac.New(sha256.New, psk)
-	_, _ = io.WriteString(m, string(shared))
+	_, _ = m.Write(shared)
 	want := m.Sum(nil)
 
 	if !hmac.Equal(got, want) {
