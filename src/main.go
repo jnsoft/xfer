@@ -16,13 +16,18 @@ var (
 	flagPort    = flag.Int("p", 9999, "port to listen on or connect to")
 	flagKeep    = flag.Bool("k", false, "keep listening after a connection closes (server)")
 	flagTimeout = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
+	flagSecure  = flag.Bool("s", false, "use secure AES-256-GCM + ECDH transport")
+	flagKey     = flag.String("key", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
 	flagHelp    = flag.Bool("h", false, "show help")
 )
 
+// add info about the other flags too
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  Connect mode: %s [host:port]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  Listen mode:  %s -l [-p port] [-k]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\nOptions:\n")
+
 	flag.PrintDefaults()
 }
 
@@ -43,7 +48,7 @@ func main() {
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
-		server.RunServer(addr, *flagKeep, *flagTimeout)
+		server.RunServer(addr, *flagKeep, *flagTimeout, *flagSecure, *flagKey)
 		return
 	}
 
@@ -56,5 +61,5 @@ func main() {
 		target = fmt.Sprintf("127.0.0.1:%d", *flagPort)
 	}
 
-	client.RunClient(target, *flagTimeout)
+	client.RunClient(target, *flagTimeout, *flagSecure, *flagKey)
 }

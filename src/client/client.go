@@ -10,7 +10,7 @@ import (
 	"github.com/jnsoft/xfer/src/connection"
 )
 
-func RunClient(target string, timeout int) {
+func RunClient(target string, timeout int, secure bool, key string) {
 	conn, err := net.Dial("tcp", target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
@@ -18,7 +18,19 @@ func RunClient(target string, timeout int) {
 	}
 	defer conn.Close()
 
-	connection.ApplyTimeout(conn, timeout)
+	var useConn net.Conn = conn
+	if secure {
+		secureConn, err := connection.WrapWithAE(conn, false, key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "handshake error: %v\n", err)
+			os.Exit(2)
+		}
+		useConn = secureConn
+		// do not double-close underlying conn; defer closing the wrapper (safe)
+		defer secureConn.Close()
+	}
+
+	connection.ApplyTimeout(useConn, timeout)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -26,17 +38,17 @@ func RunClient(target string, timeout int) {
 	// stdin -> conn
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(conn, os.Stdin)
+		_, _ = io.Copy(useConn, os.Stdin)
 		// when stdin EOF, close write side if possible
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if cw, ok := useConn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
 		}
 	}()
 
 	// conn -> stdout
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, conn)
+		_, _ = io.Copy(os.Stdout, useConn)
 	}()
 
 	wg.Wait()
