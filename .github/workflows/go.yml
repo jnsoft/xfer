@@ -23,7 +23,7 @@ jobs:
       run: |
         output="xfer-${{ matrix.goos }}-${{ matrix.goarch }}"
         if [ "${{ matrix.goos }}" = "windows" ]; then output="${output}.exe"; fi
-        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o $output ./src/main
+        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o $output ./src/main.go
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
