@@ -8,7 +8,7 @@ import (
 	"github.com/jnsoft/xfer/src/connection"
 )
 
-func RunServer(addr string, keep bool, timeout int) {
+func RunServer(addr string, keep bool, timeout int, secure bool, key string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
@@ -28,7 +28,21 @@ func RunServer(addr string, keep bool, timeout int) {
 		}
 		fmt.Fprintf(os.Stderr, "connection from %s\n", conn.RemoteAddr())
 
-		connection.HandleConn(conn, timeout)
+		var useConn net.Conn = conn
+		if secure {
+			secureConn, err := connection.WrapWithAE(conn, true, key)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "handshake error: %v\n", err)
+				_ = conn.Close()
+				if keep {
+					continue
+				}
+				break
+			}
+			useConn = secureConn
+		}
+
+		connection.HandleConn(useConn, timeout)
 
 		if !keep {
 			break

@@ -26,8 +26,8 @@ func HandleConn(conn net.Conn, timeout int) {
 		defer wg.Done()
 		_, _ = io.Copy(conn, os.Stdin)
 		// when stdin EOF, close write side of connection
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
 		}
 	}()
 
