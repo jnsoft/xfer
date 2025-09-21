@@ -33,3 +33,4 @@ go.work.sum
 
 .env*
 .bin
+*.pem
