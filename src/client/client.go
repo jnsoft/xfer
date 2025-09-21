@@ -1,6 +1,8 @@
 package client
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -10,7 +12,7 @@ import (
 	"github.com/jnsoft/xfer/src/connection"
 )
 
-func RunClient(target string, timeout int, secure bool, key string) {
+func RunClient(target string, timeout int, secure, use_tls bool, secret, certFile string) {
 	conn, err := net.Dial("tcp", target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
@@ -19,14 +21,38 @@ func RunClient(target string, timeout int, secure bool, key string) {
 	defer conn.Close()
 
 	var useConn net.Conn = conn
-	if secure {
-		secureConn, err := connection.WrapWithAE(conn, false, key)
+	if use_tls {
+		tlsConf := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true, // WARNING: for demo only!
+		}
+		if certFile != "" {
+			caCert, err := os.ReadFile(certFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to read cert file: %v\n", err)
+				os.Exit(2)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				fmt.Fprintf(os.Stderr, "Failed to parse cert file\n")
+				os.Exit(2)
+			}
+			tlsConf.RootCAs = caPool
+		}
+		tlsConn := tls.Client(conn, tlsConf)
+		if err := tlsConn.Handshake(); err != nil {
+			fmt.Fprintf(os.Stderr, "TLS handshake error: %v\n", err)
+			os.Exit(2)
+		}
+		useConn = tlsConn
+		defer tlsConn.Close()
+	} else if secure {
+		secureConn, err := connection.WrapWithAE(conn, false, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "handshake error: %v\n", err)
 			os.Exit(2)
 		}
 		useConn = secureConn
-		// do not double-close underlying conn; defer closing the wrapper (safe)
 		defer secureConn.Close()
 	}
 

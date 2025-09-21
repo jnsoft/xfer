@@ -9,6 +9,7 @@ go run src/main.go
 
 go build -o .bin/xfer ./src/main.go
 ./.bin/xfer -h
+
 ./.bin/xfer -l
 ./.bin/xfer
 
@@ -17,4 +18,8 @@ go build -o .bin/xfer ./src/main.go
 
 ./.bin/xfer -l -s -key "secret"
 ./.bin/xfer -s -key "secret"
+
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+./.bin/xfer -l -tsl -cert cert.pem -key key.pem
+./.bin/xfer -s -tls -cert cert.pem
 ```

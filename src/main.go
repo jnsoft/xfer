@@ -17,7 +17,10 @@ var (
 	flagKeep    = flag.Bool("k", false, "keep listening after a connection closes (server)")
 	flagTimeout = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
 	flagSecure  = flag.Bool("s", false, "use secure AES-256-GCM + ECDH transport")
-	flagKey     = flag.String("key", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
+	flagAuth    = flag.String("a", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
+	flagTLS     = flag.Bool("tls", false, "use TLS 1.3 transport")
+	flagCert    = flag.String("cert", "", "TLS certificate file (required for TLS)")
+	flagKey     = flag.String("key", "", "TLS private key file (server, required for TLS)")
 	flagHelp    = flag.Bool("h", false, "show help")
 )
 
@@ -27,7 +30,6 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  Connect mode: %s [host:port]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  Listen mode:  %s -l [-p port] [-k]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
-
 	flag.PrintDefaults()
 }
 
@@ -36,6 +38,17 @@ func main() {
 	if *flagHelp {
 		usage()
 		return
+	}
+
+	if *flagTLS {
+		if *flagCert == "" {
+			fmt.Fprintln(os.Stderr, "Error: -cert is required when using -tls")
+			os.Exit(2)
+		}
+		if *flagListen && *flagKey == "" {
+			fmt.Fprintln(os.Stderr, "Error: -key is required for server when using -tls")
+			os.Exit(2)
+		}
 	}
 
 	// setup interrupt handling so we close cleanly
@@ -48,7 +61,7 @@ func main() {
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
-		server.RunServer(addr, *flagKeep, *flagTimeout, *flagSecure, *flagKey)
+		server.RunServer(addr, *flagKeep, *flagTimeout, *flagSecure, *flagTLS, *flagAuth, *flagCert, *flagKey)
 		return
 	}
 
@@ -61,5 +74,5 @@ func main() {
 		target = fmt.Sprintf("127.0.0.1:%d", *flagPort)
 	}
 
-	client.RunClient(target, *flagTimeout, *flagSecure, *flagKey)
+	client.RunClient(target, *flagTimeout, *flagSecure, *flagTLS, *flagAuth, *flagCert)
 }

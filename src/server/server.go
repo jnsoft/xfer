@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
@@ -8,7 +9,7 @@ import (
 	"github.com/jnsoft/xfer/src/connection"
 )
 
-func RunServer(addr string, keep bool, timeout int, secure bool, key string) {
+func RunServer(addr string, keep bool, timeout int, secure, use_tls bool, secret, certFile, keyFile string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
@@ -29,8 +30,27 @@ func RunServer(addr string, keep bool, timeout int, secure bool, key string) {
 		fmt.Fprintf(os.Stderr, "connection from %s\n", conn.RemoteAddr())
 
 		var useConn net.Conn = conn
-		if secure {
-			secureConn, err := connection.WrapWithAE(conn, true, key)
+		if use_tls {
+			// Load server certificate and key from files
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "TLS cert/key load error: %v\n", err)
+				_ = conn.Close()
+				continue
+			}
+			tlsConf := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS13,
+			}
+			tlsConn := tls.Server(conn, tlsConf)
+			if err := tlsConn.Handshake(); err != nil {
+				fmt.Fprintf(os.Stderr, "TLS handshake error: %v\n", err)
+				_ = conn.Close()
+				continue
+			}
+			useConn = tlsConn
+		} else if secure {
+			secureConn, err := connection.WrapWithAE(conn, true, secret)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "handshake error: %v\n", err)
 				_ = conn.Close()
