@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -46,44 +46,47 @@ func WrapWithAE(conn net.Conn, isServer bool, authKey string) (*SecureConn, erro
 }
 
 func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.AEAD, error) {
-	curve := elliptic.P256()
+	curve := ecdh.P256()
 
 	// generate our private/public
-	priv, x, y, err := elliptic.GenerateKey(curve, rand.Reader)
+	priv, err := curve.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	pub := elliptic.Marshal(curve, x, y) // 65 bytes (0x04|X|Y)
+	pub := priv.PublicKey()
+	pubBytes := pub.Bytes()
 
-	var peerPub []byte
+	var peerPubBytes []byte
 	if isServer {
 		// server reads peer pubkey first, then sends its pubkey
-		peerPub, err = readBytesWithLen(conn)
+		peerPubBytes, err = readBytesWithLen(conn)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeBytesWithLen(conn, pub); err != nil {
+		if err := writeBytesWithLen(conn, pubBytes); err != nil {
 			return nil, err
 		}
 	} else {
 		// client writes first, then reads
-		if err := writeBytesWithLen(conn, pub); err != nil {
+		if err := writeBytesWithLen(conn, pubBytes); err != nil {
 			return nil, err
 		}
-		peerPub, err = readBytesWithLen(conn)
+		peerPubBytes, err = readBytesWithLen(conn)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	px, py := elliptic.Unmarshal(curve, peerPub)
-	if px == nil {
+	peerPub, err := curve.NewPublicKey(peerPubBytes)
+	if err != nil {
 		return nil, errors.New("invalid peer public key")
 	}
 
-	// shared secret: x-coordinate of scalar mult
-	sx, _ := curve.ScalarMult(px, py, priv)
-	shared := sx.Bytes()
+	// derive shared secret using ECDH
+	shared, err := priv.ECDH(peerPub)
+	if err != nil {
+		return nil, err
+	}
 
 	// if authKey provided, perform an authentication exchange to prevent MITM.
 	// client sends auth first, server reads and verifies then responds.
@@ -128,12 +131,6 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 		return nil, err
 	}
 	return aead, nil
-}
-
-func computeAuth(psk, shared []byte) []byte {
-	mac := hmac.New(sha256.New, psk)
-	mac.Write(shared)
-	return mac.Sum(nil)
 }
 
 func computeAuth(psk, shared []byte) []byte {
