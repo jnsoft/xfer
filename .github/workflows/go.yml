@@ -34,4 +34,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.goos }}-${{ matrix.goarch }}-binary
-        path: myapp-${{ matrix.goos }}-${{ matrix.goarch }}*
+        path: xfer-${{ matrix.goos }}-${{ matrix.goarch }}*
