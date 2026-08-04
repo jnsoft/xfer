@@ -60,7 +60,7 @@ same high-entropy pre-shared secret at both ends:
 ./.bin/xfer -a "a-long-random-secret" example.com:9999
 ```
 
-## Plain text mode (unsecure)
+## Plain text mode (insecure)
 Custom secure mode is enabled by default, but can be disabled with 
 `-s=false` to use plaintext TCP
 ```sh
