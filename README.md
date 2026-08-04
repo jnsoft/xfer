@@ -99,6 +99,29 @@ Run the TLS client:
 ```sh
 ./.bin/xfer -tls -cert cert.pem 127.0.0.1:9999
 ```
+## Redirects and pipeing
+```sh
+# client sends file:
+./.bin/xfer < input.bin
+cat input.bin | ./.bin/xfer 
+
+#set server to inspect binary content:
+./.bin/xfer -l | hexdump -C
+
+./.bin/xfer server.example:9999 < input.bin > output.bin
+cat input.bin | ./.bin/xfer server.example:9999 > output.bin
+./.bin/xfer -l -m < input.bin > received.bin
+```
+
+### Receiving a File
+For one exact file transfer, start the server without `-k` or `-m` and
+redirect its standard output to the destination file:
+
+```sh
+xfer -l > received.bin
+# Send the file from the client:
+./.bin/xfer server.example:9999 < input.bin
+```
 
 ## Options
 ```sh

@@ -8,9 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -91,13 +89,10 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 		return nil, err
 	}
 
-	fmt.Println("Shared key: ", hex.EncodeToString(shared)[0:8]+"...") // for debugging
-
 	// if authKey provided, perform an authentication exchange to prevent MITM.
 	// client sends auth first, server reads and verifies then responds.
 	if authKey != "" {
 		auth, err := helpers.ComputeAuth([]byte(authKey), shared, pubBytes, peerPubBytes)
-		fmt.Println("auth: ", hex.EncodeToString(auth)[0:8]+"...") // for debugging
 		if err != nil {
 			return nil, err
 		}

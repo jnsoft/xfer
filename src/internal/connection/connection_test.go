@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -13,10 +14,11 @@ func TestHandleConnReturnsWhenPeerCloses(t *testing.T) {
 	defer clientConn.Close()
 
 	var output bytes.Buffer
+	var diagnostics bytes.Buffer
 	done := make(chan struct{})
 
 	go func() {
-		HandleConn(serverConn, &output, 0)
+		HandleConn(serverConn, &output, &diagnostics, 0)
 		close(done)
 	}()
 
@@ -33,7 +35,11 @@ func TestHandleConnReturnsWhenPeerCloses(t *testing.T) {
 		t.Fatal("HandleConn did not return after peer closed")
 	}
 
-	if got := output.String(); got != message+"connection closed pipe\n" {
-		t.Fatalf("server output = %q, want received message and close message", got)
+	if got := output.String(); got != message {
+		t.Fatalf("server output = %q, want %q", got, message)
+	}
+
+	if !strings.Contains(diagnostics.String(), "connection closed") {
+		t.Fatalf("diagnostics = %q, want connection close message", diagnostics.String())
 	}
 }

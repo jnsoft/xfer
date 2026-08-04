@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
+	"golang.org/x/term"
 )
 
 const (
@@ -51,6 +51,11 @@ func RunServer(
 	}
 	defer listener.Close()
 
+	output := io.Writer(os.Stdout)
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		output = newTerminalWriter(os.Stdout)
+	}
+
 	err = Serve(listener, Config{
 		KeepListening:    keep,
 		AllowMultiple:    allowMultiple,
@@ -63,7 +68,7 @@ func RunServer(
 		KeyFile:          keyFile,
 		HandshakeTimeout: defaultHandshakeTimeout,
 		Input:            os.Stdin,
-		Output:           os.Stdout,
+		Output:           output,
 		ErrorOutput:      os.Stderr,
 	})
 	if err != nil {
@@ -138,36 +143,35 @@ func Serve(listener net.Listener, config Config) error {
 	// Only this goroutine reads server input. It broadcasts complete lines to
 	// all currently connected clients.
 	go func() {
-		scanner := bufio.NewScanner(input)
-		scanner.Buffer(make([]byte, 64*1024), maxInputLine)
+		buffer := make([]byte, 32*1024)
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			byteCount, err := input.Read(buffer)
+			if byteCount > 0 {
+				clientsMu.RLock()
+				currentClients := make([]net.Conn, 0, len(clients))
+				for clientConn := range clients {
+					currentClients = append(currentClients, clientConn)
+				}
+				clientsMu.RUnlock()
 
-			clientsMu.RLock()
-			currentClients := make([]net.Conn, 0, len(clients))
-			for clientConn := range clients {
-				currentClients = append(currentClients, clientConn)
-			}
-			clientsMu.RUnlock()
-
-			if len(currentClients) == 0 {
-				fmt.Fprintln(errorOutput, "no clients connected")
-				continue
-			}
-
-			for _, clientConn := range currentClients {
-				if _, err := fmt.Fprintln(clientConn, line); err != nil {
-					if !errors.Is(err, net.ErrClosed) {
-						fmt.Fprintf(errorOutput, "send error to %s: %v\n", clientConn.RemoteAddr(), err)
+				for _, clientConn := range currentClients {
+					if _, writeErr := clientConn.Write(buffer[:byteCount]); writeErr != nil {
+						if !errors.Is(writeErr, net.ErrClosed) {
+							fmt.Fprintf(errorOutput, "send error to %s: %v\n", clientConn.RemoteAddr(), writeErr)
+						}
+						_ = clientConn.Close()
 					}
-					_ = clientConn.Close()
 				}
 			}
-		}
 
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(errorOutput, "stdin error: %v\n", err)
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				fmt.Fprintf(errorOutput, "stdin error: %v\n", err)
+				return
+			}
 		}
 	}()
 
@@ -190,7 +194,7 @@ func Serve(listener net.Listener, config Config) error {
 		clients[useConn] = struct{}{}
 		clientsMu.Unlock()
 
-		connection.HandleConn(useConn, output, config.Timeout)
+		connection.HandleConn(useConn, output, errorOutput, config.Timeout)
 
 		clientsMu.Lock()
 		delete(clients, useConn)
