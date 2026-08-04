@@ -11,6 +11,8 @@ import (
 	"github.com/jnsoft/xfer/src/internal/server"
 )
 
+const maxClients = 1024
+
 var (
 	flagListen  = flag.Bool("l", false, "listen mode (server)")
 	flagKeep    = flag.Bool("k", false, "keep listening after a connection closes (server)")
@@ -58,6 +60,7 @@ func main() {
 			addr,
 			*flagKeep,
 			*flagMulti,
+			maxClients,
 			*flagTimeout,
 			*flagSecure,
 			*flagTLS,
@@ -96,7 +99,7 @@ Server connection policy:
   -l              Serve one client, then exit after that client disconnects.
   -l -k           Keep listening. Permit one active client; reject additional
                   clients with "server is already connected".
-  -l -m           Keep listening and permit multiple simultaneous clients.
+  -l -m           Keep listening and permit up to 1024 simultaneous clients.
                   Lines entered at the server terminal are broadcast to every
                   connected client.
   -l -k -m        Equivalent to -l -m; -m already keeps the server listening.

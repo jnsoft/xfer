@@ -239,3 +239,69 @@ func TestServeReturnsWhenListenerCloses(t *testing.T) {
 
 	stopTestServer(t, listener, done)
 }
+
+func TestServeRejectsClientsOverLimit(t *testing.T) {
+	listener, done, _ := startTestServer(t, Config{
+		AllowMultiple: true,
+		MaxClients:    1,
+		Secure:        false,
+	})
+	defer stopTestServer(t, listener, done)
+
+	firstClient := connectAndReadAdmission(t, listener.Addr().String())
+	defer firstClient.Close()
+
+	secondClient, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("second net.Dial() error = %v", err)
+	}
+	defer secondClient.Close()
+
+	if err := connection.ReadAdmission(secondClient); !errors.Is(err, connection.ErrServerBusy) {
+		t.Fatalf("second ReadAdmission() error = %v, want ErrServerBusy", err)
+	}
+}
+
+func TestServeReleasesSlotAfterHandshakeTimeout(t *testing.T) {
+	listener, done, _ := startTestServer(t, Config{
+		AllowMultiple:    true,
+		MaxClients:       1,
+		Secure:           true,
+		HandshakeTimeout: 20 * time.Millisecond,
+	})
+	defer stopTestServer(t, listener, done)
+
+	stalledClient, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("stalled net.Dial() error = %v", err)
+	}
+	defer stalledClient.Close()
+
+	if err := connection.ReadAdmission(stalledClient); err != nil {
+		t.Fatalf("stalled ReadAdmission() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		nextClient, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			t.Fatalf("next net.Dial() error = %v", err)
+		}
+
+		admissionErr := connection.ReadAdmission(nextClient)
+		_ = nextClient.Close()
+
+		if admissionErr == nil {
+			break
+		}
+
+		if !errors.Is(admissionErr, connection.ErrServerBusy) {
+			t.Fatalf("next ReadAdmission() error = %v, want nil or ErrServerBusy", admissionErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server did not release the slot after handshake timeout")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}

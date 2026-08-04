@@ -10,43 +10,60 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
 )
 
+const (
+	maxInputLine            = 1024 * 1024
+	defaultHandshakeTimeout = 10 * time.Second
+)
+
 type Config struct {
-	KeepListening bool
-	AllowMultiple bool
-	Timeout       int
-	Secure        bool
-	UseTLS        bool
-	Secret        string
-	CertFile      string
-	KeyFile       string
-	Input         io.Reader
-	Output        io.Writer
-	ErrorOutput   io.Writer
+	KeepListening    bool
+	AllowMultiple    bool
+	MaxClients       int
+	Timeout          int
+	Secure           bool
+	UseTLS           bool
+	Secret           string
+	CertFile         string
+	KeyFile          string
+	HandshakeTimeout time.Duration
+	Input            io.Reader
+	Output           io.Writer
+	ErrorOutput      io.Writer
 }
 
-func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTLS bool, secret, certFile, keyFile string) {
+func RunServer(
+	addr string,
+	keep, allowMultiple bool,
+	maxClients, timeout int,
+	secure, useTLS bool,
+	secret, certFile, keyFile string,
+) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
 		os.Exit(2)
 	}
+	defer listener.Close()
 
 	err = Serve(listener, Config{
-		KeepListening: keep,
-		AllowMultiple: allowMultiple,
-		Timeout:       timeout,
-		Secure:        secure,
-		UseTLS:        useTLS,
-		Secret:        secret,
-		CertFile:      certFile,
-		KeyFile:       keyFile,
-		Input:         os.Stdin,
-		Output:        os.Stdout,
-		ErrorOutput:   os.Stderr,
+		KeepListening:    keep,
+		AllowMultiple:    allowMultiple,
+		MaxClients:       maxClients,
+		Timeout:          timeout,
+		Secure:           secure,
+		UseTLS:           useTLS,
+		Secret:           secret,
+		CertFile:         certFile,
+		KeyFile:          keyFile,
+		HandshakeTimeout: defaultHandshakeTimeout,
+		Input:            os.Stdin,
+		Output:           os.Stdout,
+		ErrorOutput:      os.Stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -55,6 +72,15 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 }
 
 func Serve(listener net.Listener, config Config) error {
+
+	maxClients := config.MaxClients
+	if maxClients <= 0 {
+		maxClients = 1024
+	}
+	if !config.AllowMultiple {
+		maxClients = 1
+	}
+
 	input := config.Input
 	if input == nil {
 		input = strings.NewReader("")
@@ -75,13 +101,33 @@ func Serve(listener net.Listener, config Config) error {
 	var clientsMu sync.RWMutex
 	clients := make(map[net.Conn]struct{})
 
-	var activeMu sync.Mutex
-	activeClient := false
+	var clientsCountMu sync.Mutex
+	connectedClients := 0
+
+	tryReserveClient := func() bool {
+		clientsCountMu.Lock()
+		defer clientsCountMu.Unlock()
+
+		if connectedClients >= maxClients {
+			return false
+		}
+
+		connectedClients++
+		return true
+	}
+
+	releaseClient := func() {
+		clientsCountMu.Lock()
+		connectedClients--
+		clientsCountMu.Unlock()
+	}
 
 	// Only this goroutine reads server input. It broadcasts complete lines to
 	// all currently connected clients.
 	go func() {
 		scanner := bufio.NewScanner(input)
+		scanner.Buffer(make([]byte, 64*1024), maxInputLine)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -112,16 +158,9 @@ func Serve(listener net.Listener, config Config) error {
 		}
 	}()
 
-	handleClient := func(conn net.Conn, singleClient bool) {
+	handleClient := func(conn net.Conn) {
 		defer conn.Close()
-
-		if singleClient {
-			defer func() {
-				activeMu.Lock()
-				activeClient = false
-				activeMu.Unlock()
-			}()
-		}
+		defer releaseClient()
 
 		if err := connection.SendAdmission(conn, true); err != nil {
 			fmt.Fprintf(errorOutput, "admission write error to %s: %v\n", conn.RemoteAddr(), err)
@@ -153,36 +192,41 @@ func Serve(listener net.Listener, config Config) error {
 
 		fmt.Fprintf(errorOutput, "connection attempt from %s\n", conn.RemoteAddr())
 
-		if config.AllowMultiple {
-			go handleClient(conn, false)
-			continue
-		}
-
-		activeMu.Lock()
-		busy := activeClient
-		if !busy {
-			activeClient = true
-		}
-		activeMu.Unlock()
-
-		if busy {
-			fmt.Fprintf(errorOutput, "connection rejected from %s: server already has an active client\n", conn.RemoteAddr())
+		if !tryReserveClient() {
+			fmt.Fprintf(
+				errorOutput,
+				"connection rejected from %s: server is full (maximum %d clients)\n",
+				conn.RemoteAddr(),
+				maxClients,
+			)
 			_ = connection.SendAdmission(conn, false)
 			_ = conn.Close()
 			continue
 		}
 
-		if config.KeepListening {
-			go handleClient(conn, true)
+		if config.AllowMultiple || config.KeepListening {
+			go handleClient(conn)
 			continue
 		}
 
-		handleClient(conn, true)
+		handleClient(conn)
 		return nil
 	}
 }
 
 func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
+	if config.UseTLS || config.Secure {
+		handshakeTimeout := config.HandshakeTimeout
+		if handshakeTimeout <= 0 {
+			handshakeTimeout = defaultHandshakeTimeout
+		}
+
+		if err := conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+			return nil, fmt.Errorf("set handshake deadline: %w", err)
+		}
+		defer conn.SetDeadline(time.Time{})
+	}
+
 	if config.UseTLS {
 		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 		if err != nil {

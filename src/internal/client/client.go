@@ -23,7 +23,7 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 
 	if err := connection.ReadAdmission(conn); err != nil {
 		if errors.Is(err, connection.ErrServerBusy) {
-			fmt.Fprintln(os.Stderr, "connect error: server is already connected")
+			fmt.Fprintln(os.Stderr, "connect error: server is busy or full")
 		} else {
 			fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
 		}
