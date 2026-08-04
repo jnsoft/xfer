@@ -51,7 +51,7 @@ func main() {
 		}
 	}
 
-	// setup interrupt handling so we close cleanly
+	// setup interrupt handling to close cleanly
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

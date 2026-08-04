@@ -4,7 +4,7 @@ Command-line tool for data transfer over TCP/UDP
 ### Build and run
 ```
 go test -v ./...
-go test ./src/helpers
+go test ./src/internal/helpers
 go run src/main.go
 
 go build -o .bin/xfer ./src/main.go
