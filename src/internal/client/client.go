@@ -21,6 +21,15 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 	}
 	defer conn.Close()
 
+	if err := connection.ReadAdmission(conn); err != nil {
+		if errors.Is(err, connection.ErrServerBusy) {
+			fmt.Fprintln(os.Stderr, "connect error: server is already connected")
+		} else {
+			fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
+		}
+		os.Exit(2)
+	}
+
 	var useConn net.Conn = conn
 	if use_tls {
 		tlsConf := &tls.Config{

@@ -28,6 +28,10 @@ GOOS=windows GOARCH=amd64 go build -o .bin/xfer-windows-amd64.exe ./src/main.go
 # Run client:
 ./.bin/xfer
 
+# Authenticated end-to-end confidentiality and integrity:
+./.bin/xfer -l -a 'a-long-random-secret'
+./.bin/xfer -a 'a-long-random-secret'
+
 # Show help:
 ./.bin/xfer -h
 
