@@ -3,13 +3,14 @@ package client
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
 
-	"github.com/jnsoft/xfer/src/connection"
+	"github.com/jnsoft/xfer/src/internal/connection"
 )
 
 func RunClient(target string, timeout int, secure, use_tls bool, secret, certFile string) {
@@ -64,8 +65,14 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 	// stdin -> conn
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(useConn, os.Stdin)
-		// when stdin EOF, close write side if possible
+
+		if _, err := io.Copy(useConn, os.Stdin); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintf(os.Stderr, "send error: %v\n", err)
+			_ = useConn.Close()
+			return
+		}
+
+		// A normal stdin EOF only closes this direction; replies can still arrive.
 		if cw, ok := useConn.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
@@ -74,7 +81,13 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 	// conn -> stdout
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, useConn)
+
+		if _, err := io.Copy(os.Stdout, useConn); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintf(os.Stderr, "receive error: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "server closed connection")
+		}
+		os.Exit(0)
 	}()
 
 	wg.Wait()

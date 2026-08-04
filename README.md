@@ -7,11 +7,31 @@ go test -v ./...
 go test ./src/internal/helpers
 go run src/main.go
 
-go build -o .bin/xfer ./src/main.go
+go run  ./src/main.go
+
+#linux
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o .bin/xfer ./src/main.go
+
+#win
+GOOS=windows GOARCH=amd64 go build -o .bin/xfer-windows-amd64.exe ./src/main.go
+
+# Run server:
+# One client, then exit after it disconnects
+./.bin/xfer -l
+
+# One client at a time; accept a replacement after disconnect
+./.bin/xfer -l -k
+
+# Many clients at once; terminal input broadcasts to all of them
+./.bin/xfer -l -m
+
+# Run client:
+./.bin/xfer
+
+# Show help:
 ./.bin/xfer -h
 
-./.bin/xfer -l
-./.bin/xfer
+
 
 ./.bin/xfer -l -s
 ./.bin/xfer -s

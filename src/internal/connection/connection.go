@@ -1,6 +1,7 @@
 package connection
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,13 +20,27 @@ func HandleConn(conn net.Conn, timeout int) {
 
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(os.Stdout, conn)
+
+		if _, err := io.Copy(os.Stdout, conn); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintf(os.Stderr, "receive error: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "peer closed connection %s\n", conn.RemoteAddr())
+		}
+
+		// Unblocks the stdin -> conn goroutine so HandleConn can return.
+		_ = conn.Close()
 	}()
 
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(conn, os.Stdin)
-		// when stdin EOF, close write side of connection
+
+		if _, err := io.Copy(conn, os.Stdin); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintf(os.Stderr, "send error: %v\n", err)
+			_ = conn.Close()
+			return
+		}
+
+		// Keep the read side available when local stdin reaches EOF normally.
 		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}

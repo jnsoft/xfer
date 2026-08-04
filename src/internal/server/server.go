@@ -6,10 +6,10 @@ import (
 	"net"
 	"os"
 
-	"github.com/jnsoft/xfer/src/connection"
+	"github.com/jnsoft/xfer/src/internal/connection"
 )
 
-func RunServer(addr string, keep bool, timeout int, secure, use_tls bool, secret, certFile, keyFile string) {
+func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTLS bool, secret, certFile, keyFile string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
@@ -30,7 +30,7 @@ func RunServer(addr string, keep bool, timeout int, secure, use_tls bool, secret
 		fmt.Fprintf(os.Stderr, "connection from %s\n", conn.RemoteAddr())
 
 		var useConn net.Conn = conn
-		if use_tls {
+		if useTLS {
 			// Load server certificate and key from files
 			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 			if err != nil {

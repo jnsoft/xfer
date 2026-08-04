@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jnsoft/xfer/src/client"
-	"github.com/jnsoft/xfer/src/server"
+	"github.com/jnsoft/xfer/src/internal/client"
+	"github.com/jnsoft/xfer/src/internal/server"
 )
 
 var (
@@ -16,11 +16,12 @@ var (
 	flagPort    = flag.Int("p", 9999, "port to listen on or connect to")
 	flagKeep    = flag.Bool("k", false, "keep listening after a connection closes (server)")
 	flagTimeout = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
-	flagSecure  = flag.Bool("s", false, "use secure AES-256-GCM + ECDH transport")
+	flagSecure  = flag.Bool("s", true, "use secure AES-256-GCM + ECDH transport")
 	flagAuth    = flag.String("a", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
 	flagTLS     = flag.Bool("tls", false, "use TLS 1.3 transport")
 	flagCert    = flag.String("cert", "", "TLS certificate file (required for TLS)")
 	flagKey     = flag.String("key", "", "TLS private key file (server, required for TLS)")
+	flagMulti   = flag.Bool("m", false, "allow multiple simultaneous client connections (server)")
 	flagHelp    = flag.Bool("h", false, "show help")
 )
 
@@ -28,7 +29,7 @@ var (
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  Connect mode: %s [host:port]\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "  Listen mode:  %s -l [-p port] [-k]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  Listen mode:  %s -l [-p port] [-k] [-m]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
 	flag.PrintDefaults()
 }
@@ -61,7 +62,17 @@ func main() {
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
-		server.RunServer(addr, *flagKeep, *flagTimeout, *flagSecure, *flagTLS, *flagAuth, *flagCert, *flagKey)
+		server.RunServer(
+			addr,
+			*flagKeep,
+			*flagMulti,
+			*flagTimeout,
+			*flagSecure,
+			*flagTLS,
+			*flagAuth,
+			*flagCert,
+			*flagKey,
+		)
 		return
 	}
 
