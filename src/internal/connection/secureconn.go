@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jnsoft/xfer/src/helpers"
+	"github.com/jnsoft/xfer/src/internal/helpers"
 )
 
 type SecureConn struct {

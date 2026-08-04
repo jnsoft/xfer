@@ -6,7 +6,7 @@
     },
     "runArgs": [
         "--network=host",
-        "--name=devc_go",
+        "--name=devc_xfer",
         "--privileged"
     ],
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind", // ,relabel=private

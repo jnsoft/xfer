@@ -3,7 +3,6 @@ package connection
 import (
 	"io"
 	"net"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -23,18 +22,7 @@ func runWrapAsync(c net.Conn, isServer bool, key string, id string, ch chan<- wr
 	ch <- wrapResult{conn: sc, err: err, id: id}
 }
 
-func dumpStacks(t *testing.T) {
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	t.Logf("=== goroutine stack dump ===\n%s", buf[:n])
-}
-
 func TestSecureConn_NoAuth_RoundTrip(t *testing.T) {
-	go func() {
-		<-time.After(2 * time.Second)
-		dumpStacks(t)
-	}()
-
 	c1, c2 := net.Pipe()
 	defer c1.Close()
 	defer c2.Close()
@@ -93,24 +81,24 @@ func TestSecureConn_NoAuth_RoundTrip(t *testing.T) {
 
 	// server -> client
 	msg2 := []byte("reply from server")
-    wg.Add(2)
-    go func() {
-        defer wg.Done()
-        if _, err := serverRes.conn.Write(msg2); err != nil {
-            t.Errorf("server write error: %v", err)
-        }
-    }()
-    go func() {
-        defer wg.Done()
-        buf2 := make([]byte, len(msg2))
-        if _, err := io.ReadFull(clientRes.conn, buf2); err != nil {
-            t.Errorf("client read error: %v", err)
-        }
-        if string(buf2) != string(msg2) {
-            t.Errorf("client got %q want %q", buf2, msg2)
-        }
-    }()
-    wg.Wait()
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if _, err := serverRes.conn.Write(msg2); err != nil {
+			t.Errorf("server write error: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		buf2 := make([]byte, len(msg2))
+		if _, err := io.ReadFull(clientRes.conn, buf2); err != nil {
+			t.Errorf("client read error: %v", err)
+		}
+		if string(buf2) != string(msg2) {
+			t.Errorf("client got %q want %q", buf2, msg2)
+		}
+	}()
+	wg.Wait()
 
 	_ = serverRes.conn.Close()
 	_ = clientRes.conn.Close()
