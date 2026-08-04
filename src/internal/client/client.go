@@ -32,9 +32,15 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 
 	var useConn net.Conn = conn
 	if use_tls {
+		serverName, _, err := net.SplitHostPort(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid server address %q: %v\n", target, err)
+			os.Exit(2)
+		}
 		tlsConf := &tls.Config{
-			MinVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true, // WARNING: for demo only!
+			MinVersion: tls.VersionTLS13,
+			ServerName: serverName,
+			// InsecureSkipVerify: true, // WARNING: for demo only!
 		}
 		if certFile != "" {
 			caCert, err := os.ReadFile(certFile)
