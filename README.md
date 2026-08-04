@@ -123,6 +123,11 @@ xfer -l > received.bin
 ./.bin/xfer server.example:9999 < input.bin
 ```
 
+## Check whether a TCP port accepts connections.
+```sh
+./.bin/xfer -z example.com:443
+```
+
 ## Options
 ```sh
 -l              Listen as a server.
@@ -135,5 +140,6 @@ xfer -l > received.bin
 -tls            Use TLS 1.3 instead of custom secure mode.
 -cert file      TLS certificate on the server; trusted CA/server certificate on client.
 -key file       TLS server private key.
+-z              Check whether a TCP port is reachable; do not transfer data.
 -h              Show help.
 ```

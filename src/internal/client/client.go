@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
 )
@@ -106,4 +107,12 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 	}()
 
 	wg.Wait()
+}
+
+func CheckPort(target string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("tcp", target, timeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }

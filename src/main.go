@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jnsoft/xfer/src/internal/client"
 	"github.com/jnsoft/xfer/src/internal/server"
@@ -24,6 +25,7 @@ var (
 	flagTLS     = flag.Bool("tls", false, "use TLS 1.3 transport")
 	flagCert    = flag.String("cert", "", "TLS certificate file (required for TLS)")
 	flagKey     = flag.String("key", "", "TLS private key file (server, required for TLS)")
+	flagZeroIO  = flag.Bool("z", false, "check whether a TCP port is reachable")
 	flagHelp    = flag.Bool("h", false, "show help")
 )
 
@@ -80,6 +82,21 @@ func main() {
 		target = fmt.Sprintf("127.0.0.1:%d", *flagPort)
 	}
 
+	if *flagZeroIO {
+		timeout := 5 * time.Second
+		if *flagTimeout > 0 {
+			timeout = time.Duration(*flagTimeout) * time.Second
+		}
+
+		if err := client.CheckPort(target, timeout); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: connection failed: %v\n", target, err)
+			os.Exit(1)
+		}
+
+		fmt.Fprintf(os.Stderr, "%s: connection succeeded\n", target)
+		return
+	}
+
 	client.RunClient(target, *flagTimeout, *flagSecure, *flagTLS, *flagAuth, *flagCert)
 }
 
@@ -126,6 +143,7 @@ Options:
   -p port         Listen or connect port when no port is provided in client mode
                   (default: 9999).
   -t seconds      I/O timeout in seconds; 0 disables the timeout (default: 0).
+  -z              Check whether a TCP port is reachable; do not transfer data.
   -h              Show this help text.
 
 Examples:
