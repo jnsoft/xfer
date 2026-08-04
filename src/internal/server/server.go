@@ -31,6 +31,7 @@ type Config struct {
 	CertFile         string
 	KeyFile          string
 	HandshakeTimeout time.Duration
+	tlsConfig        *tls.Config
 	Input            io.Reader
 	Output           io.Writer
 	ErrorOutput      io.Writer
@@ -94,6 +95,18 @@ func Serve(listener net.Listener, config Config) error {
 	errorOutput := config.ErrorOutput
 	if errorOutput == nil {
 		errorOutput = io.Discard
+	}
+
+	if config.UseTLS {
+		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+		if err != nil {
+			return fmt.Errorf("load TLS certificate and key: %w", err)
+		}
+
+		config.tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
 	}
 
 	fmt.Fprintf(errorOutput, "listening on %s\n", listener.Addr())
@@ -228,15 +241,11 @@ func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
 	}
 
 	if config.UseTLS {
-		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load TLS certificate and key: %w", err)
+		if config.tlsConfig == nil {
+			return nil, errors.New("TLS configuration is not initialized")
 		}
 
-		tlsConn := tls.Server(conn, &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS13,
-		})
+		tlsConn := tls.Server(conn, config.tlsConfig)
 
 		if err := tlsConn.Handshake(); err != nil {
 			return nil, fmt.Errorf("TLS handshake: %w", err)

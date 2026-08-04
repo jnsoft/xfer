@@ -305,3 +305,24 @@ func TestServeReleasesSlotAfterHandshakeTimeout(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestServeFailsBeforeAcceptingWithInvalidTLSConfiguration(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	err = Serve(listener, Config{
+		UseTLS:   true,
+		CertFile: "does-not-exist-cert.pem",
+		KeyFile:  "does-not-exist-key.pem",
+	})
+
+	if err == nil {
+		t.Fatal("Serve() error = nil, want TLS configuration error")
+	}
+	if !strings.Contains(err.Error(), "load TLS certificate and key") {
+		t.Fatalf("Serve() error = %v, want TLS configuration error", err)
+	}
+}
