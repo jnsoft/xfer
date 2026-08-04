@@ -5,12 +5,28 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
 )
+
+type Config struct {
+	KeepListening bool
+	AllowMultiple bool
+	Timeout       int
+	Secure        bool
+	UseTLS        bool
+	Secret        string
+	CertFile      string
+	KeyFile       string
+	Input         io.Reader
+	Output        io.Writer
+	ErrorOutput   io.Writer
+}
 
 func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTLS bool, secret, certFile, keyFile string) {
 	listener, err := net.Listen("tcp", addr)
@@ -18,9 +34,43 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
 		os.Exit(2)
 	}
-	defer listener.Close()
 
-	fmt.Fprintf(os.Stderr, "listening on %s\n", addr)
+	err = Serve(listener, Config{
+		KeepListening: keep,
+		AllowMultiple: allowMultiple,
+		Timeout:       timeout,
+		Secure:        secure,
+		UseTLS:        useTLS,
+		Secret:        secret,
+		CertFile:      certFile,
+		KeyFile:       keyFile,
+		Input:         os.Stdin,
+		Output:        os.Stdout,
+		ErrorOutput:   os.Stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+		os.Exit(2)
+	}
+}
+
+func Serve(listener net.Listener, config Config) error {
+	input := config.Input
+	if input == nil {
+		input = strings.NewReader("")
+	}
+
+	output := config.Output
+	if output == nil {
+		output = io.Discard
+	}
+
+	errorOutput := config.ErrorOutput
+	if errorOutput == nil {
+		errorOutput = io.Discard
+	}
+
+	fmt.Fprintf(errorOutput, "listening on %s\n", listener.Addr())
 
 	var clientsMu sync.RWMutex
 	clients := make(map[net.Conn]struct{})
@@ -28,9 +78,10 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 	var activeMu sync.Mutex
 	activeClient := false
 
+	// Only this goroutine reads server input. It broadcasts complete lines to
+	// all currently connected clients.
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-
+		scanner := bufio.NewScanner(input)
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -42,14 +93,14 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 			clientsMu.RUnlock()
 
 			if len(currentClients) == 0 {
-				fmt.Fprintln(os.Stderr, "no clients connected")
+				fmt.Fprintln(errorOutput, "no clients connected")
 				continue
 			}
 
 			for _, clientConn := range currentClients {
 				if _, err := fmt.Fprintln(clientConn, line); err != nil {
 					if !errors.Is(err, net.ErrClosed) {
-						fmt.Fprintf(os.Stderr, "send error to %s: %v\n", clientConn.RemoteAddr(), err)
+						fmt.Fprintf(errorOutput, "send error to %s: %v\n", clientConn.RemoteAddr(), err)
 					}
 					_ = clientConn.Close()
 				}
@@ -57,7 +108,7 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 		}
 
 		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "stdin error: %v\n", err)
+			fmt.Fprintf(errorOutput, "stdin error: %v\n", err)
 		}
 	}()
 
@@ -73,45 +124,21 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 		}
 
 		if err := connection.SendAdmission(conn, true); err != nil {
-			fmt.Fprintf(os.Stderr, "admission write error to %s: %v\n", conn.RemoteAddr(), err)
+			fmt.Fprintf(errorOutput, "admission write error to %s: %v\n", conn.RemoteAddr(), err)
 			return
 		}
 
-		var useConn net.Conn = conn
-
-		if useTLS {
-			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "TLS cert/key load error: %v\n", err)
-				return
-			}
-
-			tlsConn := tls.Server(conn, &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS13,
-			})
-
-			if err := tlsConn.Handshake(); err != nil {
-				fmt.Fprintf(os.Stderr, "TLS handshake error from %s: %v\n", conn.RemoteAddr(), err)
-				return
-			}
-
-			useConn = tlsConn
-		} else if secure {
-			secureConn, err := connection.WrapWithAE(conn, true, secret)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "handshake error from %s: %v\n", conn.RemoteAddr(), err)
-				return
-			}
-
-			useConn = secureConn
+		useConn, err := prepareConnection(conn, config)
+		if err != nil {
+			fmt.Fprintf(errorOutput, "connection setup error from %s: %v\n", conn.RemoteAddr(), err)
+			return
 		}
 
 		clientsMu.Lock()
 		clients[useConn] = struct{}{}
 		clientsMu.Unlock()
 
-		connection.HandleConn(useConn, timeout)
+		connection.HandleConn(useConn, output, config.Timeout)
 
 		clientsMu.Lock()
 		delete(clients, useConn)
@@ -121,16 +148,12 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
-			if keep || allowMultiple {
-				continue
-			}
-			return
+			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "connection attempt from %s\n", conn.RemoteAddr())
+		fmt.Fprintf(errorOutput, "connection attempt from %s\n", conn.RemoteAddr())
 
-		if allowMultiple {
+		if config.AllowMultiple {
 			go handleClient(conn, false)
 			continue
 		}
@@ -143,19 +166,48 @@ func RunServer(addr string, keep, allowMultiple bool, timeout int, secure, useTL
 		activeMu.Unlock()
 
 		if busy {
-			fmt.Fprintf(os.Stderr, "connection rejected from %s: server already has an active client\n", conn.RemoteAddr())
+			fmt.Fprintf(errorOutput, "connection rejected from %s: server already has an active client\n", conn.RemoteAddr())
 			_ = connection.SendAdmission(conn, false)
 			_ = conn.Close()
 			continue
 		}
 
-		if keep {
+		if config.KeepListening {
 			go handleClient(conn, true)
 			continue
 		}
 
-		// Without -k, serve the first client and exit when it disconnects.
 		handleClient(conn, true)
-		return
+		return nil
 	}
+}
+
+func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
+	if config.UseTLS {
+		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load TLS certificate and key: %w", err)
+		}
+
+		tlsConn := tls.Server(conn, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		})
+
+		if err := tlsConn.Handshake(); err != nil {
+			return nil, fmt.Errorf("TLS handshake: %w", err)
+		}
+
+		return tlsConn, nil
+	}
+
+	if config.Secure {
+		secureConn, err := connection.WrapWithAE(conn, true, config.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("secure handshake: %w", err)
+		}
+		return secureConn, nil
+	}
+
+	return conn, nil
 }

@@ -137,5 +137,5 @@ Examples:
   %s -l -tls -cert cert.pem -key key.pem
   %s -tls -cert cert.pem localhost:9999
 
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }
