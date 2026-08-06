@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	maxInputLine            = 1024 * 1024
+	bufferSize              = 32 * 1024
 	defaultHandshakeTimeout = 10 * time.Second
 )
 
@@ -27,6 +27,7 @@ type Config struct {
 	Timeout          int
 	Secure           bool
 	UseTLS           bool
+	Compress         bool
 	Secret           string
 	CertFile         string
 	KeyFile          string
@@ -41,7 +42,7 @@ func RunServer(
 	addr string,
 	keep, allowMultiple bool,
 	maxClients, timeout int,
-	secure, useTLS bool,
+	secure, useTLS, compress bool,
 	secret, certFile, keyFile string,
 ) {
 	listener, err := net.Listen("tcp", addr)
@@ -63,6 +64,7 @@ func RunServer(
 		Timeout:          timeout,
 		Secure:           secure,
 		UseTLS:           useTLS,
+		Compress:         compress,
 		Secret:           secret,
 		CertFile:         certFile,
 		KeyFile:          keyFile,
@@ -143,7 +145,7 @@ func Serve(listener net.Listener, config Config) error {
 	// Only this goroutine reads server input. It broadcasts complete lines to
 	// all currently connected clients.
 	go func() {
-		buffer := make([]byte, 32*1024)
+		buffer := make([]byte, bufferSize)
 
 		for {
 			byteCount, err := input.Read(buffer)
@@ -188,6 +190,15 @@ func Serve(listener net.Listener, config Config) error {
 		if err != nil {
 			fmt.Fprintf(errorOutput, "connection setup error from %s: %v\n", conn.RemoteAddr(), err)
 			return
+		}
+
+		if err := connection.NegotiateCompression(useConn, true, config.Compress); err != nil {
+			fmt.Fprintf(errorOutput, "compression setup error from %s: %v\n", conn.RemoteAddr(), err)
+			return
+		}
+
+		if config.Compress {
+			useConn = connection.WrapWithCompression(useConn)
 		}
 
 		clientsMu.Lock()

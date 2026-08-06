@@ -14,7 +14,7 @@ import (
 	"github.com/jnsoft/xfer/src/internal/connection"
 )
 
-func RunClient(target string, timeout int, secure, use_tls bool, secret, certFile string) {
+func RunClient(target string, timeout int, secure, use_tls, compress bool, secret, certFile string) {
 	conn, err := net.Dial("tcp", target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
@@ -71,6 +71,15 @@ func RunClient(target string, timeout int, secure, use_tls bool, secret, certFil
 		}
 		useConn = secureConn
 		defer secureConn.Close()
+	}
+
+	if err := connection.NegotiateCompression(useConn, false, compress); err != nil {
+		fmt.Fprintf(os.Stderr, "compression setup error: %v\n", err)
+		os.Exit(2)
+	}
+
+	if compress {
+		useConn = connection.WrapWithCompression(useConn)
 	}
 
 	connection.ApplyTimeout(useConn, timeout)

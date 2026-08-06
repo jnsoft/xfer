@@ -15,18 +15,19 @@ import (
 const maxClients = 1024
 
 var (
-	flagListen  = flag.Bool("l", false, "listen mode (server)")
-	flagKeep    = flag.Bool("k", false, "keep listening after a connection closes (server)")
-	flagMulti   = flag.Bool("m", false, "allow simultaneous clients; broadcast server input (server)")
-	flagPort    = flag.Int("p", 9999, "port to listen on or connect to")
-	flagTimeout = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
-	flagSecure  = flag.Bool("s", true, "use secure AES-256-GCM + ECDH transport")
-	flagAuth    = flag.String("a", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
-	flagTLS     = flag.Bool("tls", false, "use TLS 1.3 transport")
-	flagCert    = flag.String("cert", "", "TLS certificate file (required for TLS)")
-	flagKey     = flag.String("key", "", "TLS private key file (server, required for TLS)")
-	flagZeroIO  = flag.Bool("z", false, "check whether a TCP port is reachable")
-	flagHelp    = flag.Bool("h", false, "show help")
+	flagListen   = flag.Bool("l", false, "listen mode (server)")
+	flagKeep     = flag.Bool("k", false, "keep listening after a connection closes (server)")
+	flagMulti    = flag.Bool("m", false, "allow simultaneous clients; broadcast server input (server)")
+	flagPort     = flag.Int("p", 9999, "port to listen on or connect to")
+	flagTimeout  = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
+	flagSecure   = flag.Bool("s", true, "use secure AES-256-GCM + ECDH transport")
+	flagAuth     = flag.String("a", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
+	flagTLS      = flag.Bool("tls", false, "use TLS 1.3 transport")
+	flagCert     = flag.String("cert", "", "TLS certificate file (required for TLS)")
+	flagKey      = flag.String("key", "", "TLS private key file (server, required for TLS)")
+	flagCompress = flag.Bool("c", false, "compress data before transport")
+	flagZeroIO   = flag.Bool("z", false, "check whether a TCP port is reachable")
+	flagHelp     = flag.Bool("h", false, "show help")
 )
 
 func main() {
@@ -66,6 +67,7 @@ func main() {
 			*flagTimeout,
 			*flagSecure,
 			*flagTLS,
+			*flagCompress,
 			*flagAuth,
 			*flagCert,
 			*flagKey,
@@ -97,7 +99,13 @@ func main() {
 		return
 	}
 
-	client.RunClient(target, *flagTimeout, *flagSecure, *flagTLS, *flagAuth, *flagCert)
+	client.RunClient(target,
+		*flagTimeout,
+		*flagSecure,
+		*flagTLS,
+		*flagCompress,
+		*flagAuth,
+		*flagCert)
 }
 
 func usage() {
@@ -133,6 +141,8 @@ Transport:
                   Client: PEM CA or self-signed server certificate to trust.
                   Required with -tls.
   -key file       Server PEM private-key file. Required with -tls.
+  -c              Compress transferred data before encrypting/TLS transport.
+                  Must be enabled on both client and server.
 
 TLS certificates:
   The client verifies both the certificate chain and the hostname/IP supplied

@@ -77,6 +77,10 @@ func stopTestServer(t *testing.T, listener net.Listener, done <-chan error) {
 }
 
 func connectAndReadAdmission(t *testing.T, address string) net.Conn {
+	return connectAndReadAdmissionWithCompression(t, address, false)
+}
+
+func connectAndReadAdmissionWithCompression(t *testing.T, address string, compress bool) net.Conn {
 	t.Helper()
 
 	conn, err := net.Dial("tcp", address)
@@ -87,6 +91,11 @@ func connectAndReadAdmission(t *testing.T, address string) net.Conn {
 	if err := connection.ReadAdmission(conn); err != nil {
 		_ = conn.Close()
 		t.Fatalf("ReadAdmission() error = %v, want nil", err)
+	}
+
+	if err := connection.NegotiateCompression(conn, false, compress); err != nil {
+		_ = conn.Close()
+		t.Fatalf("NegotiateCompression() error = %v", err)
 	}
 
 	return conn
@@ -324,5 +333,66 @@ func TestServeFailsBeforeAcceptingWithInvalidTLSConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load TLS certificate and key") {
 		t.Fatalf("Serve() error = %v, want TLS configuration error", err)
+	}
+}
+
+func TestServeForwardsCompressedClientOutput(t *testing.T) {
+	var output lockedBuffer
+
+	listener, done, _ := startTestServer(t, Config{
+		KeepListening: true,
+		Secure:        false,
+		Compress:      true,
+		Output:        &output,
+	})
+	defer stopTestServer(t, listener, done)
+
+	rawClient := connectAndReadAdmissionWithCompression(t, listener.Addr().String(), true)
+	defer rawClient.Close()
+
+	client := connection.WrapWithCompression(rawClient)
+	const message = "compressed client message\n"
+
+	if _, err := io.WriteString(client, message); err != nil {
+		t.Fatalf("client Write() error = %v", err)
+	}
+	if err := client.CloseWrite(); err != nil {
+		t.Fatalf("client CloseWrite() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(output.String(), message) {
+		if time.Now().After(deadline) {
+			t.Fatalf("server output = %q, want %q", output.String(), message)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestServeBroadcastsCompressedInput(t *testing.T) {
+    inputReader, inputWriter := io.Pipe()
+    defer inputWriter.Close()
+
+    listener, done, _ := startTestServer(t, Config{
+        AllowMultiple: true,
+        Secure:        false,
+        Compress:      true,
+        Input:         inputReader,
+    })
+    defer stopTestServer(t, listener, done)
+
+    rawClient := connectAndReadAdmissionWithCompression(t, listener.Addr().String(), true)
+    defer rawClient.Close()
+
+    client := connection.WrapWithCompression(rawClient)
+    defer client.Close()
+
+	const message = "compressed server message\n"
+	if _, err := io.WriteString(inputWriter, message); err != nil {
+		t.Fatalf("input Write() error = %v", err)
+	}
+
+	if got := readLine(t, client); got != message {
+		t.Fatalf("client received %q, want %q", got, message)
 	}
 }
