@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -41,8 +42,22 @@ var (
 )
 
 func main() {
-	flag.Usage = usage
-	flag.Parse()
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "send":
+			runSend(os.Args[2:])
+			return
+		case "receive":
+			runReceive(os.Args[2:])
+			return
+		}
+	}
+
+	runInteractive(os.Args[1:])
+}
+
+func runInteractive(args []string) {
+	flag.CommandLine.Parse(args)
 	if *flagHelp {
 		usage()
 		return
@@ -55,55 +70,20 @@ func main() {
 		target = fmt.Sprintf("%s:%d", defaultAddress, *flagPort)
 	}
 
-	if *flagTLS && *flagCert == "" {
-		fmt.Fprintln(os.Stderr, "Error: -cert is required when using -tls")
-		os.Exit(2)
+	var (
+		clientTLSConfig *tls.Config
+		serverTLSConfig *tls.Config
+		err             error
+	)
+
+	if *flagListen {
+		serverTLSConfig, err = loadServerTLSConfig()
+	} else {
+		clientTLSConfig, err = loadClientTLSConfig(target)
 	}
-	if *flagTLS && *flagListen && *flagKey == "" {
-		fmt.Fprintln(os.Stderr, "Error: -key is required for server when using -tls")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
-	}
-
-	var clientTLSConfig *tls.Config
-	var serverTLSConfig *tls.Config
-
-	if *flagTLS {
-		if *flagListen {
-			certificate, err := tls.LoadX509KeyPair(*flagCert, *flagKey)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "load TLS certificate and key: %v\n", err)
-				os.Exit(2)
-			}
-
-			serverTLSConfig = &tls.Config{
-				Certificates: []tls.Certificate{certificate},
-				MinVersion:   tls.VersionTLS13,
-			}
-		} else {
-			certificatePEM, err := os.ReadFile(*flagCert)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "read TLS certificate: %v\n", err)
-				os.Exit(2)
-			}
-
-			roots := x509.NewCertPool()
-			if !roots.AppendCertsFromPEM(certificatePEM) {
-				fmt.Fprintln(os.Stderr, "parse TLS certificate: no certificates found")
-				os.Exit(2)
-			}
-
-			host, _, err := net.SplitHostPort(target)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid server address %q: %v\n", target, err)
-				os.Exit(2)
-			}
-
-			clientTLSConfig = &tls.Config{
-				MinVersion: tls.VersionTLS13,
-				ServerName: host,
-				RootCAs:    roots,
-			}
-		}
 	}
 
 	timeout := time.Duration(*flagTimeout) * time.Second
@@ -174,9 +154,141 @@ func main() {
 	}
 }
 
+func runSend(args []string) {
+	if err := flag.CommandLine.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *flagHelp {
+		usage()
+		return
+	}
+	if flag.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: xfer send [options] <source-file> <host:port>")
+		os.Exit(2)
+	}
+
+	sourcePath := flag.Arg(0)
+	target := flag.Arg(1)
+	clientTLSConfig, err := loadClientTLSConfig(target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	timeout := time.Duration(*flagTimeout) * time.Second
+	if err := client.SendFile(client.FileConfig{
+		Connection: client.Config{
+			Target:    target,
+			Timeout:   timeout,
+			Secure:    *flagSecure,
+			UseTLS:    *flagTLS,
+			Compress:  *flagCompress,
+			Secret:    *flagAuth,
+			TLSConfig: clientTLSConfig,
+		},
+		SourcePath: sourcePath,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
+		os.Exit(2)
+	}
+}
+
+func runReceive(args []string) {
+	if err := flag.CommandLine.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *flagHelp {
+		usage()
+		return
+	}
+	if flag.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: xfer receive [options] <destination-file>")
+		os.Exit(2)
+	}
+
+	serverTLSConfig, err := loadServerTLSConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	timeout := time.Duration(*flagTimeout) * time.Second
+	err = server.ReceiveFile(ctx, server.FileConfig{
+		Server: server.Config{
+			Addr:        fmt.Sprintf(":%d", *flagPort),
+			Timeout:     timeout,
+			Secure:      *flagSecure,
+			UseTLS:      *flagTLS,
+			Compress:    *flagCompress,
+			Secret:      *flagAuth,
+			TLSConfig:   serverTLSConfig,
+			ErrorOutput: os.Stderr,
+		},
+		Destination: flag.Arg(0),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "receive failed: %v\n", err)
+		os.Exit(2)
+	}
+}
+
+func loadClientTLSConfig(target string) (*tls.Config, error) {
+	if !*flagTLS {
+		return nil, nil
+	}
+	if *flagCert == "" {
+		return nil, errors.New("-cert is required when using -tls")
+	}
+
+	certificatePEM, err := os.ReadFile(*flagCert)
+	if err != nil {
+		return nil, fmt.Errorf("read TLS certificate: %w", err)
+	}
+
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certificatePEM) {
+		return nil, errors.New("parse TLS certificate: no certificates found")
+	}
+
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server address %q: %w", target, err)
+	}
+
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: host,
+		RootCAs:    roots,
+	}, nil
+}
+
+func loadServerTLSConfig() (*tls.Config, error) {
+	if !*flagTLS {
+		return nil, nil
+	}
+	if *flagCert == "" || *flagKey == "" {
+		return nil, errors.New("-cert and -key are required when using -tls")
+	}
+
+	certificate, err := tls.LoadX509KeyPair(*flagCert, *flagKey)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate and key: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS13,
+	}, nil
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   %s [options] [host:port]
+  %s send [options] <source-file> <host:port>
+  %s receive [options] <destination-file>
   %s -l [options]
 
 Modes:
@@ -234,5 +346,13 @@ Examples:
   %s -l -tls -cert cert.pem -key key.pem
   %s -tls -cert cert.pem localhost:9999
 
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+  # Receive one verified file, then exit.
+  %s receive -c received.iso
+
+  # Send a file.
+  %s send -c source.iso example.com:9999
+
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0],
+		os.Args[0], os.Args[0], os.Args[0], os.Args[0],
+		os.Args[0], os.Args[0], os.Args[0])
 }
