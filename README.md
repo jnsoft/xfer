@@ -37,7 +37,8 @@ xfer send [options] <source-file> <host:port>
 xfer receive [options] <destination-file>
 ```
 
-With no host:port, the client connects to 127.0.0.1:9999
+* With no host:port, the client connects to 127.0.0.1:9999
+* With no port, the server uses port 9999
 
 ```sh
 # Serve one client, then exit when it disconnects.
@@ -58,8 +59,7 @@ With no host:port, the client connects to 127.0.0.1:9999
 Use -c to gzip-compress application data before it is passed to the selected secure transport. Compression capability negotiation occurs after TLS or custom transport setup.
 
 ## Custom Secure Transport
-For authenticated encryption and man-in-the-middle protection, provide the
-same high-entropy pre-shared secret at both ends:
+For authenticated encryption and man-in-the-middle protection, provide the same high-entropy pre-shared secret at both ends:
 ```sh
 # server:
 ./.bin/xfer -l -a "a-long-random-secret"
@@ -117,7 +117,7 @@ cat input.bin | ./.bin/xfer server.example:9999 > output.bin
 ./.bin/xfer -l -m < input.bin > received.bin
 ```
 
-### Receiving a File
+### Receiving a File (interactive mode)
 For one exact file transfer, start the server without `-k` or `-m` and
 redirect its standard output to the destination file:
 ```sh
