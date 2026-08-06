@@ -32,6 +32,9 @@ GOOS=windows GOARCH=amd64 go build -o .bin/xfer-windows-amd64.exe ./src/main.go
 ```sh
 xfer [options] [host:port]
 xfer -l [options]
+
+xfer send [options] <source-file> <host:port>
+xfer receive [options] <destination-file>
 ```
 
 With no host:port, the client connects to 127.0.0.1:9999
@@ -47,9 +50,13 @@ With no host:port, the client connects to 127.0.0.1:9999
 # Server-terminal input is broadcast to all connected clients.
 ./.bin/xfer -l -m
 
-# Start client.
-./.bin/xfer
+# Connect interactively.
+./.bin/xfer example.com:9999
 ```
+
+### Compression
+Use -c to gzip-compress application data before it is passed to the selected secure transport. Compression capability negotiation occurs after TLS or custom transport setup.
+
 ## Custom Secure Transport
 For authenticated encryption and man-in-the-middle protection, provide the
 same high-entropy pre-shared secret at both ends:
@@ -69,7 +76,7 @@ Custom secure mode is enabled by default, but can be disabled with
 ```
 
 ### TLS 1.3
-Generate a self-signed certificate for localhost:
+Generate a self-signed certificate:
 ```sh
 openssl req -x509 -newkey rsa:2048 \
   -keyout key.pem \
@@ -79,27 +86,24 @@ openssl req -x509 -newkey rsa:2048 \
   -subj "/CN=localhost" \
   -addext "subjectAltName=DNS:localhost"
 ```
-Run the TLS server:
+
 ```sh
+# Interactive TLS server and client.
 ./.bin/xfer -l -tls -cert cert.pem -key key.pem
-```
-
-Run the TLS client. It trusts cert.pem and validates that the certificate
-matches localhost:
-```sh
 ./.bin/xfer -tls -cert cert.pem localhost:9999
+
+# TLS file transfer.
+./.bin/xfer receive -tls -cert cert.pem -key key.pem received.iso
+./.bin/xfer send -tls -cert cert.pem source.iso localhost:9999
 ```
 
-For an IP-address connection, the certificate needs an IP SAN instead when generating the certificate:
+The client verifies the certificate chain and that its SAN matches the supplied hostname or IP address. For an IP address, generate the certificate with an IP SAN:
 ```sh
 -addext "subjectAltName=IP:127.0.0.1"
 ```
 
-Run the TLS client:
-```sh
-./.bin/xfer -tls -cert cert.pem 127.0.0.1:9999
-```
 ## Redirects and pipeing
+Standard input and output can  be redirected or piped in interactive mode:
 ```sh
 # client sends file:
 ./.bin/xfer < input.bin
@@ -116,11 +120,21 @@ cat input.bin | ./.bin/xfer server.example:9999 > output.bin
 ### Receiving a File
 For one exact file transfer, start the server without `-k` or `-m` and
 redirect its standard output to the destination file:
-
 ```sh
 xfer -l > received.bin
 # Send the file from the client:
 ./.bin/xfer server.example:9999 < input.bin
+```
+
+## File transfer
+Receiver: listen on port 9999 and save the verified file.
+```sh
+./.bin/xfer receive received.iso
+```
+
+Sender: connect and send one file.
+```sh
+./.bin/xfer send source.iso receiver.example:9999
 ```
 
 ## Check whether a TCP port accepts connections.
@@ -130,17 +144,18 @@ xfer -l > received.bin
 
 ## Options
 ```sh
--l              Listen as a server.
--k              Keep listening after a client disconnects.
--m              Allow simultaneous clients; server input broadcasts to all.
--p port         Port to listen on or default client port; default 9999.
+-l              Listen in interactive server mode.
+-k              Keep listening after an interactive client disconnects.
+-m              Allow simultaneous interactive clients and broadcast server input.
+-p port         Listen port or default interactive client port; default 9999.
 -t seconds      I/O timeout; 0 disables it.
 -s=true|false   Enable or disable custom ECDH/AES-GCM transport; default true.
 -a secret       Pre-shared authentication secret for custom secure mode.
 -tls            Use TLS 1.3 instead of custom secure mode.
--cert file      TLS certificate on the server; trusted CA/server certificate on client.
+-cert file      TLS server certificate, or client CA/server certificate to trust.
 -key file       TLS server private key.
--z              Check whether a TCP port is reachable; do not transfer data.
+-c              Gzip-compress transferred data; both peers must enable it.
+-z              Check whether a TCP port is reachable; no xfer protocol handshake.
 -h              Show help.
 ```
 
@@ -258,8 +273,6 @@ Requirements:
 - Add explicit upload/download commands or flags rather than mixing this behavior into normal TCP client mode.
 - Use the official Azure SDK for Go and add unit tests for round-trip encryption/decryption plus integration tests against Azurite or a dedicated test storage account.
 
-## Refactor
-File mode: add explicit send/receive commands with a framed metadata header, exact size, SHA-256, temporary output file, and final rename only after verification.
-I recommend implementing these as separate commits. The protocol hello and file transfer alter wire compatibility and need focused integration tests across plaintext, custom secure, TLS, compression, mismatched capabilities, interrupted transfers, and checksum failure.
+
 
 
