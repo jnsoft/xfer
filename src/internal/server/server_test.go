@@ -94,9 +94,9 @@ func connectAndReadAdmissionWithCompression(t *testing.T, address string, compre
 		t.Fatalf("ReadAdmission() error = %v, want nil", err)
 	}
 
-	if err := connection.NegotiateCompression(conn, false, compress); err != nil {
+	if _, err := connection.NegotiateCapabilities(conn, false, compress); err != nil {
 		_ = conn.Close()
-		t.Fatalf("NegotiateCompression() error = %v", err)
+		t.Fatalf("NegotiateCapabilities() error = %v", err)
 	}
 
 	return conn
@@ -116,6 +116,39 @@ func readLine(t *testing.T, conn net.Conn) string {
 	}
 
 	return line
+}
+
+func TestServeRequiresStreams(t *testing.T) {
+	tests := []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{"missing input", Config{}, "server input is required"},
+		{
+			"missing output",
+			Config{Input: strings.NewReader("")},
+			"server output is required",
+		},
+		{
+			"missing error output",
+			Config{
+				Input:  strings.NewReader(""),
+				Output: io.Discard,
+			},
+			"server error output is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := Serve(context.Background(), nil, test.config)
+
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("Serve() error = %v, want %q", err, test.want)
+			}
+		})
+	}
 }
 
 func TestServeRejectsSecondSingleClientAndAcceptsReconnect(t *testing.T) {

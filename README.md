@@ -259,8 +259,6 @@ Requirements:
 - Use the official Azure SDK for Go and add unit tests for round-trip encryption/decryption plus integration tests against Azurite or a dedicated test storage account.
 
 ## Refactor
-Config refactor: replace RunClient(...) and RunServer(...) positional arguments with client.Config and server.Config; move os.Exit decisions into main.go.
-Protected hello: after TLS/custom-security setup and before compression, exchange a versioned capability record inside the protected connection. It should negotiate compression and reject incompatible versions/settings.
 File mode: add explicit send/receive commands with a framed metadata header, exact size, SHA-256, temporary output file, and final rename only after verification.
 I recommend implementing these as separate commits. The protocol hello and file transfer alter wire compatibility and need focused integration tests across plaintext, custom secure, TLS, compression, mismatched capabilities, interrupted transfers, and checksum failure.
 

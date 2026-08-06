@@ -185,12 +185,13 @@ func Serve(ctx context.Context, listener net.Listener, config Config) error {
 			return
 		}
 
-		if err := connection.NegotiateCompression(useConn, true, config.Compress); err != nil {
-			fmt.Fprintf(config.ErrorOutput, "compression setup error from %s: %v\n", conn.RemoteAddr(), err)
+		compress, err := connection.NegotiateCapabilities(useConn, true, config.Compress)
+		if err != nil {
+			fmt.Fprintf(config.ErrorOutput, "protocol negotiation error from %s: %v\n", conn.RemoteAddr(), err)
 			return
 		}
 
-		if config.Compress {
+		if compress {
 			useConn = connection.WrapWithCompression(useConn)
 		}
 

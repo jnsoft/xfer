@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-type negotiationResult struct {
-	err error
+type capabilityResult struct {
+	compress bool
+	err      error
 }
 
 func TestCompressedConnRoundTrip(t *testing.T) {
@@ -128,17 +129,18 @@ func TestCompressedConnCloseWriteFinalizesStream(t *testing.T) {
 	}
 }
 
-func TestNegotiateCompression(t *testing.T) {
+func TestNegotiateCapabilities(t *testing.T) {
 	tests := []struct {
 		name          string
 		serverEnabled bool
 		clientEnabled bool
-		wantErr       bool
+		wantCompress  bool
+		wantErr       error
 	}{
-		{"both disabled", false, false, false},
-		{"both enabled", true, true, false},
-		{"server only", true, false, true},
-		{"client only", false, true, true},
+		{"both disabled", false, false, false, nil},
+		{"both enabled", true, true, true, nil},
+		{"server only", true, false, false, ErrCompressionMismatch},
+		{"client only", false, true, false, ErrCompressionMismatch},
 	}
 
 	for _, test := range tests {
@@ -147,31 +149,78 @@ func TestNegotiateCompression(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 
-			results := make(chan negotiationResult, 2)
+			results := make(chan capabilityResult, 2)
 
 			go func() {
-				results <- negotiationResult{
-					err: NegotiateCompression(server, true, test.serverEnabled),
-				}
+				compress, err := NegotiateCapabilities(server, true, test.serverEnabled)
+				results <- capabilityResult{compress: compress, err: err}
 			}()
+
 			go func() {
-				results <- negotiationResult{
-					err: NegotiateCompression(client, false, test.clientEnabled),
-				}
+				compress, err := NegotiateCapabilities(client, false, test.clientEnabled)
+				results <- capabilityResult{compress: compress, err: err}
 			}()
 
 			for range 2 {
-				err := (<-results).err
-				if test.wantErr {
-					if !errors.Is(err, ErrCompressionMismatch) {
-						t.Fatalf("NegotiateCompression() error = %v, want ErrCompressionMismatch", err)
+				result := <-results
+
+				if test.wantErr != nil {
+					if !errors.Is(result.err, test.wantErr) {
+						t.Fatalf("NegotiateCapabilities() error = %v, want %v", result.err, test.wantErr)
 					}
 					continue
 				}
-				if err != nil {
-					t.Fatalf("NegotiateCompression() error = %v, want nil", err)
+
+				if result.err != nil {
+					t.Fatalf("NegotiateCapabilities() error = %v, want nil", result.err)
+				}
+				if result.compress != test.wantCompress {
+					t.Fatalf("compression = %t, want %t", result.compress, test.wantCompress)
 				}
 			}
 		})
+	}
+}
+
+func TestNegotiateCapabilitiesRejectsInvalidMagic(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	go func() {
+		_, _ = readHello(server)
+
+		var invalidHello [helloSize]byte
+		copy(invalidHello[:4], "NOPE")
+		invalidHello[4] = helloVersion
+		_, _ = server.Write(invalidHello[:])
+	}()
+
+	_, err := NegotiateCapabilities(client, false, false)
+	if err == nil {
+		t.Fatal("NegotiateCapabilities() error = nil, want invalid protocol hello")
+	}
+	if !strings.Contains(err.Error(), "invalid protocol hello") {
+		t.Fatalf("NegotiateCapabilities() error = %v, want invalid protocol hello", err)
+	}
+}
+
+func TestNegotiateCapabilitiesRejectsUnsupportedVersion(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	go func() {
+		_, _ = readHello(server)
+
+		var unsupportedHello [helloSize]byte
+		copy(unsupportedHello[:4], "XFR2")
+		unsupportedHello[4] = helloVersion + 1
+		_, _ = server.Write(unsupportedHello[:])
+	}()
+
+	_, err := NegotiateCapabilities(client, false, false)
+	if !errors.Is(err, ErrProtocolVersion) {
+		t.Fatalf("NegotiateCapabilities() error = %v, want ErrProtocolVersion", err)
 	}
 }

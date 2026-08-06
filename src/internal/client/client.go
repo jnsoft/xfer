@@ -71,11 +71,12 @@ func RunClient(config Config) error {
 		defer secureConn.Close()
 	}
 
-	if err := connection.NegotiateCompression(useConn, false, config.Compress); err != nil {
-		return fmt.Errorf("compression setup error: %w", err)
+	compress, err := connection.NegotiateCapabilities(useConn, false, config.Compress)
+	if err != nil {
+		return fmt.Errorf("protocol negotiation: %w", err)
 	}
 
-	if config.Compress {
+	if compress {
 		useConn = connection.WrapWithCompression(useConn)
 	}
 
