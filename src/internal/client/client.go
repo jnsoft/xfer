@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
@@ -82,33 +81,31 @@ func RunClient(config Config) error {
 
 	connection.ApplyTimeout(useConn, config.Timeout)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	receivedDone := make(chan struct{})
 
-	// stdin -> conn
+	// input -> server
 	go func() {
-		defer wg.Done()
-
-		if _, err := io.Copy(useConn, config.Input); err != nil && !errors.Is(err, net.ErrClosed) {
+		if _, err := io.Copy(useConn, config.Input); err != nil &&
+			!errors.Is(err, net.ErrClosed) {
 			fmt.Fprintf(config.ErrorOutput, "send error: %v\n", err)
 			_ = useConn.Close()
 			return
 		}
 
-		// A normal stdin EOF only closes this direction; replies can still arrive.
-		if cw, ok := useConn.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
+		if closeWriter, ok := useConn.(interface{ CloseWrite() error }); ok {
+			_ = closeWriter.CloseWrite()
 		}
 	}()
 
-	// conn -> stdout
+	// server -> output
 	go func() {
-		defer wg.Done()
+		defer close(receivedDone)
 
 		copyServerOutput(config.Output, useConn, config.ErrorOutput)
+		_ = useConn.Close()
 	}()
 
-	wg.Wait()
+	<-receivedDone
 	return nil
 }
 
