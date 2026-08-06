@@ -257,3 +257,53 @@ Requirements:
 - Support large files with streaming or chunked authenticated encryption; do not load whole files into memory.
 - Add explicit upload/download commands or flags rather than mixing this behavior into normal TCP client mode.
 - Use the official Azure SDK for Go and add unit tests for round-trip encryption/decryption plus integration tests against Azurite or a dedicated test storage account.
+
+## Refactor
+Config refactor: replace RunClient(...) and RunServer(...) positional arguments with client.Config and server.Config; move os.Exit decisions into main.go.
+Protected hello: after TLS/custom-security setup and before compression, exchange a versioned capability record inside the protected connection. It should negotiate compression and reject incompatible versions/settings.
+File mode: add explicit send/receive commands with a framed metadata header, exact size, SHA-256, temporary output file, and final rename only after verification.
+I recommend implementing these as separate commits. The protocol hello and file transfer alter wire compatibility and need focused integration tests across plaintext, custom secure, TLS, compression, mismatched capabilities, interrupted transfers, and checksum failure.
+
+
+tlsConf := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			ServerName: serverName,
+			// InsecureSkipVerify: true, // debug only!
+		}
+		if config.CertFile != "" {
+			caCert, err := os.ReadFile(config.CertFile)
+			if err != nil {
+				return fmt.Errorf("failed to read cert file: %w", err)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("failed to parse cert file")
+			}
+			tlsConf.RootCAs = caPool
+		}
+
+    serverName, _, err := net.SplitHostPort(config.Target)
+		if err != nil {
+			return fmt.Errorf("invalid server address %q: %w", config.Target, err)
+		}
+		
+		tlsConn := tls.Client(conn, tlsConf)
+		if err := tlsConn.Handshake(); err != nil {
+			return fmt.Errorf("TLS handshake error: %w", err)
+		}
+		useConn = tlsConn
+		defer tlsConn.Close()
+
+    ---
+
+    if config.UseTLS {
+		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+		if err != nil {
+			return fmt.Errorf("load TLS certificate and key: %w", err)
+		}
+
+		config.tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+	}

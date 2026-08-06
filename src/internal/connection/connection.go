@@ -9,7 +9,7 @@ import (
 )
 
 
-func HandleConn(conn net.Conn, output, errorOutput io.Writer, timeout int) {
+func HandleConn(conn net.Conn, output, errorOutput io.Writer, timeout time.Duration) {
 	defer conn.Close()
 	ApplyTimeout(conn, timeout)
 
@@ -22,11 +22,9 @@ func HandleConn(conn net.Conn, output, errorOutput io.Writer, timeout int) {
 	fmt.Fprintf(errorOutput, "connection closed %s\n", conn.RemoteAddr())
 }
 
-func ApplyTimeout(conn net.Conn, timeout int) {
-	if timeout <= 0 {
-		return
-	}
-
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
-	_ = conn.SetDeadline(deadline)
+func ApplyTimeout(conn net.Conn, timeout time.Duration) {
+    if timeout <= 0 {
+        return
+    }
+    _ = conn.SetDeadline(time.Now().Add(timeout))
 }

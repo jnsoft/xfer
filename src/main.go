@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,9 +15,14 @@ import (
 
 	"github.com/jnsoft/xfer/src/internal/client"
 	"github.com/jnsoft/xfer/src/internal/server"
+	"github.com/jnsoft/xfer/src/internal/terminal"
+	"golang.org/x/term"
 )
 
-const maxClients = 1024
+const (
+	maxClients     = 1024
+	defaultAddress = "127.0.0.1" // if no host:port provided, use localhost:port
+)
 
 var (
 	flagListen   = flag.Bool("l", false, "listen mode (server)")
@@ -39,16 +48,65 @@ func main() {
 		return
 	}
 
+	target := ""
+	if flag.NArg() > 0 {
+		target = flag.Arg(0)
+	} else {
+		target = fmt.Sprintf("%s:%d", defaultAddress, *flagPort)
+	}
+
+	if *flagTLS && *flagCert == "" {
+		fmt.Fprintln(os.Stderr, "Error: -cert is required when using -tls")
+		os.Exit(2)
+	}
+	if *flagTLS && *flagListen && *flagKey == "" {
+		fmt.Fprintln(os.Stderr, "Error: -key is required for server when using -tls")
+		os.Exit(2)
+	}
+
+	var clientTLSConfig *tls.Config
+	var serverTLSConfig *tls.Config
+
 	if *flagTLS {
-		if *flagCert == "" {
-			fmt.Fprintln(os.Stderr, "Error: -cert is required when using -tls")
-			os.Exit(2)
-		}
-		if *flagListen && *flagKey == "" {
-			fmt.Fprintln(os.Stderr, "Error: -key is required for server when using -tls")
-			os.Exit(2)
+		if *flagListen {
+			certificate, err := tls.LoadX509KeyPair(*flagCert, *flagKey)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "load TLS certificate and key: %v\n", err)
+				os.Exit(2)
+			}
+
+			serverTLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{certificate},
+				MinVersion:   tls.VersionTLS13,
+			}
+		} else {
+			certificatePEM, err := os.ReadFile(*flagCert)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "read TLS certificate: %v\n", err)
+				os.Exit(2)
+			}
+
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(certificatePEM) {
+				fmt.Fprintln(os.Stderr, "parse TLS certificate: no certificates found")
+				os.Exit(2)
+			}
+
+			host, _, err := net.SplitHostPort(target)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid server address %q: %v\n", target, err)
+				os.Exit(2)
+			}
+
+			clientTLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				ServerName: host,
+				RootCAs:    roots,
+			}
 		}
 	}
+
+	timeout := time.Duration(*flagTimeout) * time.Second
 
 	// setup interrupt handling to close cleanly
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -56,30 +114,32 @@ func main() {
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
-		server.RunServer(
-			ctx,
-			addr,
-			*flagKeep,
-			*flagMulti,
-			maxClients,
-			*flagTimeout,
-			*flagSecure,
-			*flagTLS,
-			*flagCompress,
-			*flagAuth,
-			*flagCert,
-			*flagKey,
-		)
-		return
-	}
 
-	// client mode: need host:port argument
-	target := ""
-	if flag.NArg() > 0 {
-		target = flag.Arg(0)
-	} else {
-		// if no host:port provided, use localhost:port
-		target = fmt.Sprintf("127.0.0.1:%d", *flagPort)
+		serverOutput := io.Writer(os.Stdout)
+
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			serverOutput = terminal.NewWriter(os.Stdout)
+		}
+		err := server.Run(ctx, server.Config{
+			Addr:          addr,
+			KeepListening: *flagKeep,
+			AllowMultiple: *flagMulti,
+			MaxClients:    maxClients,
+			Timeout:       timeout,
+			Secure:        *flagSecure,
+			UseTLS:        *flagTLS,
+			Compress:      *flagCompress,
+			Secret:        *flagAuth,
+			TLSConfig:     serverTLSConfig,
+			Input:         os.Stdin,
+			Output:        serverOutput,
+			ErrorOutput:   os.Stderr,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(2)
+		}
+		return
 	}
 
 	if *flagZeroIO {
@@ -97,13 +157,21 @@ func main() {
 		return
 	}
 
-	client.RunClient(target,
-		*flagTimeout,
-		*flagSecure,
-		*flagTLS,
-		*flagCompress,
-		*flagAuth,
-		*flagCert)
+	if err := client.RunClient(client.Config{
+		Target:      target,
+		Timeout:     timeout,
+		Secure:      *flagSecure,
+		UseTLS:      *flagTLS,
+		Compress:    *flagCompress,
+		Secret:      *flagAuth,
+		TLSConfig:   clientTLSConfig,
+		Input:       os.Stdin,
+		Output:      os.Stdout,
+		ErrorOutput: os.Stderr,
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 }
 
 func usage() {

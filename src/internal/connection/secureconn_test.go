@@ -1,8 +1,12 @@
 package connection
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,5 +195,39 @@ func TestSecureConn_WithAuth_MismatchedKeyFails(t *testing.T) {
 	if clientRes.conn != nil && clientRes.err == nil {
 		_ = clientRes.conn.Close()
 
+	}
+}
+
+func TestSecureConnRejectsOversizedFrame(t *testing.T) {
+	serverRaw, clientRaw := net.Pipe()
+	defer serverRaw.Close()
+	defer clientRaw.Close()
+
+	block, err := aes.NewCipher(make([]byte, 32))
+	if err != nil {
+		t.Fatalf("aes.NewCipher() error = %v", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM() error = %v", err)
+	}
+
+	server := &SecureConn{
+		conn: clientRaw,
+		aead: aead,
+	}
+
+	go func() {
+		var header [4]byte
+		binary.BigEndian.PutUint32(header[:], uint32(maxFrameSize+1))
+		_, _ = serverRaw.Write(header[:])
+	}()
+
+	_, err = server.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatal("Read() error = nil, want invalid frame size")
+	}
+	if !strings.Contains(err.Error(), "invalid frame size") {
+		t.Fatalf("Read() error = %v, want invalid frame size", err)
 	}
 }

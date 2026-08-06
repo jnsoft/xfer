@@ -17,6 +17,12 @@ import (
 	"github.com/jnsoft/xfer/src/internal/helpers"
 )
 
+const (
+	maxPlaintextSize = 32 * 1024
+	maxFrameSize     = maxPlaintextSize + 12 + 16 // GCM nonce + authentication tag
+	maxChunk         = maxPlaintextSize
+)
+
 type SecureConn struct {
 	conn net.Conn
 	aead cipher.AEAD
@@ -159,8 +165,9 @@ func (s *SecureConn) Read(p []byte) (int, error) {
 	if err := binary.Read(s.conn, binary.BigEndian, &l); err != nil {
 		return 0, err
 	}
-	if l < uint32(s.aead.NonceSize()) {
-		return 0, errors.New("invalid frame")
+	if l < uint32(s.aead.NonceSize()+s.aead.Overhead()) ||
+		l > uint32(maxFrameSize) {
+		return 0, errors.New("invalid frame size")
 	}
 	frame := make([]byte, int(l))
 	if _, err := io.ReadFull(s.conn, frame); err != nil {
@@ -183,7 +190,6 @@ func (s *SecureConn) Write(p []byte) (int, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 
-	const maxChunk = 32 * 1024 // 32KB plaintext per frame
 	total := 0
 	for len(p) > 0 {
 		chunk := p

@@ -2,87 +2,85 @@ package client
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
 )
 
-func RunClient(target string, timeout int, secure, use_tls, compress bool, secret, certFile string) {
-	conn, err := net.Dial("tcp", target)
+type Config struct {
+	Target      string
+	Timeout     time.Duration
+	Secure      bool
+	UseTLS      bool
+	Compress    bool
+	Secret      string
+	TLSConfig   *tls.Config
+	Input       io.Reader
+	Output      io.Writer
+	ErrorOutput io.Writer
+}
+
+func RunClient(config Config) error {
+	if config.Input == nil {
+		return errors.New("client input is required")
+	}
+	if config.Output == nil {
+		return errors.New("client output is required")
+	}
+	if config.ErrorOutput == nil {
+		return errors.New("client error output is required")
+	}
+
+	conn, err := net.Dial("tcp", config.Target)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
-		os.Exit(2)
+		return fmt.Errorf("connect error: %w", err)
 	}
 	defer conn.Close()
 
 	if err := connection.ReadAdmission(conn); err != nil {
 		if errors.Is(err, connection.ErrServerBusy) {
-			fmt.Fprintln(os.Stderr, "connect error: server is busy or full")
+			return fmt.Errorf("connect error: server is busy or full")
 		} else {
-			fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
+			return fmt.Errorf("connect error: %w", err)
 		}
-		os.Exit(2)
 	}
 
 	var useConn net.Conn = conn
-	if use_tls {
-		serverName, _, err := net.SplitHostPort(target)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid server address %q: %v\n", target, err)
-			os.Exit(2)
+	if config.UseTLS {
+		tlsConfig := config.TLSConfig
+		if tlsConfig == nil {
+			return errors.New("TLS configuration is required")
 		}
-		tlsConf := &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			ServerName: serverName,
-			// InsecureSkipVerify: true, // WARNING: for demo only!
-		}
-		if certFile != "" {
-			caCert, err := os.ReadFile(certFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to read cert file: %v\n", err)
-				os.Exit(2)
-			}
-			caPool := x509.NewCertPool()
-			if !caPool.AppendCertsFromPEM(caCert) {
-				fmt.Fprintf(os.Stderr, "Failed to parse cert file\n")
-				os.Exit(2)
-			}
-			tlsConf.RootCAs = caPool
-		}
-		tlsConn := tls.Client(conn, tlsConf)
+
+		tlsConn := tls.Client(conn, tlsConfig)
 		if err := tlsConn.Handshake(); err != nil {
-			fmt.Fprintf(os.Stderr, "TLS handshake error: %v\n", err)
-			os.Exit(2)
+			return fmt.Errorf("TLS handshake: %w", err)
 		}
 		useConn = tlsConn
 		defer tlsConn.Close()
-	} else if secure {
-		secureConn, err := connection.WrapWithAE(conn, false, secret)
+	} else if config.Secure {
+		secureConn, err := connection.WrapWithAE(conn, false, config.Secret)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "handshake error: %v\n", err)
-			os.Exit(2)
+			return fmt.Errorf("handshake error: %w", err)
 		}
 		useConn = secureConn
 		defer secureConn.Close()
 	}
 
-	if err := connection.NegotiateCompression(useConn, false, compress); err != nil {
-		fmt.Fprintf(os.Stderr, "compression setup error: %v\n", err)
-		os.Exit(2)
+	if err := connection.NegotiateCompression(useConn, false, config.Compress); err != nil {
+		return fmt.Errorf("compression setup error: %w", err)
 	}
 
-	if compress {
+	if config.Compress {
 		useConn = connection.WrapWithCompression(useConn)
 	}
 
-	connection.ApplyTimeout(useConn, timeout)
+	connection.ApplyTimeout(useConn, config.Timeout)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -91,8 +89,8 @@ func RunClient(target string, timeout int, secure, use_tls, compress bool, secre
 	go func() {
 		defer wg.Done()
 
-		if _, err := io.Copy(useConn, os.Stdin); err != nil && !errors.Is(err, net.ErrClosed) {
-			fmt.Fprintf(os.Stderr, "send error: %v\n", err)
+		if _, err := io.Copy(useConn, config.Input); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintf(config.ErrorOutput, "send error: %v\n", err)
 			_ = useConn.Close()
 			return
 		}
@@ -107,11 +105,11 @@ func RunClient(target string, timeout int, secure, use_tls, compress bool, secre
 	go func() {
 		defer wg.Done()
 
-		copyServerOutput(os.Stdout, useConn, os.Stderr)
-		os.Exit(0)
+		copyServerOutput(config.Output, useConn, config.ErrorOutput)
 	}()
 
 	wg.Wait()
+	return nil
 }
 
 func CheckPort(target string, timeout time.Duration) error {

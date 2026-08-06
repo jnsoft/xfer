@@ -324,15 +324,16 @@ func TestServeFailsBeforeAcceptingWithInvalidTLSConfiguration(t *testing.T) {
 	defer listener.Close()
 
 	err = Serve(context.Background(), listener, Config{
-		UseTLS:   true,
-		CertFile: "does-not-exist-cert.pem",
-		KeyFile:  "does-not-exist-key.pem",
+		UseTLS:      true,
+		Input:       strings.NewReader(""),
+		Output:      io.Discard,
+		ErrorOutput: io.Discard,
 	})
 
 	if err == nil {
 		t.Fatal("Serve() error = nil, want TLS configuration error")
 	}
-	if !strings.Contains(err.Error(), "load TLS certificate and key") {
+	if !strings.Contains(err.Error(), "TLS configuration is required") {
 		t.Fatalf("Serve() error = %v, want TLS configuration error", err)
 	}
 }
