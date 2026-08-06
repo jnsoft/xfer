@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -50,16 +51,13 @@ func main() {
 	}
 
 	// setup interrupt handling to close cleanly
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigc
-		os.Exit(0)
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	if *flagListen {
 		addr := fmt.Sprintf(":%d", *flagPort)
 		server.RunServer(
+			ctx,
 			addr,
 			*flagKeep,
 			*flagMulti,

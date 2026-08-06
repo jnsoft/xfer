@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ type Config struct {
 }
 
 func RunServer(
+	ctx context.Context,
 	addr string,
 	keep, allowMultiple bool,
 	maxClients, timeout int,
@@ -57,7 +59,7 @@ func RunServer(
 		output = newTerminalWriter(os.Stdout)
 	}
 
-	err = Serve(listener, Config{
+	err = Serve(ctx, listener, Config{
 		KeepListening:    keep,
 		AllowMultiple:    allowMultiple,
 		MaxClients:       maxClients,
@@ -79,7 +81,12 @@ func RunServer(
 	}
 }
 
-func Serve(listener net.Listener, config Config) error {
+func Serve(ctx context.Context, listener net.Listener, config Config) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	maxClients := config.MaxClients
 	if maxClients <= 0 {
@@ -120,6 +127,31 @@ func Serve(listener net.Listener, config Config) error {
 
 	var clientsMu sync.RWMutex
 	clients := make(map[net.Conn]struct{})
+
+	var clientsWG sync.WaitGroup
+
+	closeClients := func() {
+		clientsMu.RLock()
+		currentClients := make([]net.Conn, 0, len(clients))
+		for clientConn := range clients {
+			currentClients = append(currentClients, clientConn)
+		}
+		clientsMu.RUnlock()
+
+		for _, clientConn := range currentClients {
+			_ = clientConn.Close()
+		}
+	}
+
+	go func() {
+		<-serveCtx.Done()
+		_ = listener.Close()
+	}()
+
+	go func() {
+		<-serveCtx.Done()
+		closeClients()
+	}()
 
 	var clientsCountMu sync.Mutex
 	connectedClients := 0
@@ -215,6 +247,10 @@ func Serve(listener net.Listener, config Config) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				clientsWG.Wait()
+				return nil
+			}
 			return err
 		}
 
@@ -233,7 +269,11 @@ func Serve(listener net.Listener, config Config) error {
 		}
 
 		if config.AllowMultiple || config.KeepListening {
-			go handleClient(conn)
+			clientsWG.Add(1)
+			go func() {
+				defer clientsWG.Done()
+				handleClient(conn)
+			}()
 			continue
 		}
 

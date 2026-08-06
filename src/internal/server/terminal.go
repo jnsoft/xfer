@@ -20,6 +20,14 @@ func (w *terminalWriter) Write(data []byte) (int, error) {
 	defer w.mu.Unlock()
 
 	for _, value := range data {
+
+		if value == '\n' || value == '\r' || value == '\t' {
+			if _, err := w.writer.Write([]byte{value}); err != nil {
+				return 0, err
+			}
+			continue
+		}
+
 		if value >= 0x20 && value <= 0x7e {
 			if _, err := w.writer.Write([]byte{value}); err != nil {
 				return 0, err

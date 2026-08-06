@@ -107,11 +107,7 @@ func RunClient(target string, timeout int, secure, use_tls, compress bool, secre
 	go func() {
 		defer wg.Done()
 
-		if _, err := io.Copy(os.Stdout, useConn); err != nil && !errors.Is(err, net.ErrClosed) {
-			fmt.Fprintf(os.Stderr, "receive error: %v\n", err)
-		} else {
-			fmt.Fprintln(os.Stderr, "server closed connection")
-		}
+		copyServerOutput(os.Stdout, useConn, os.Stderr)
 		os.Exit(0)
 	}()
 
@@ -124,4 +120,20 @@ func CheckPort(target string, timeout time.Duration) error {
 		return err
 	}
 	return conn.Close()
+}
+
+func copyServerOutput(output io.Writer, input io.Reader, diagnostics io.Writer) {
+	if _, err := io.Copy(output, input); err != nil {
+		switch {
+		case errors.Is(err, net.ErrClosed):
+			fmt.Fprintln(diagnostics, "server closed connection")
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			fmt.Fprintln(diagnostics, "server closed connection unexpectedly")
+		default:
+			fmt.Fprintf(diagnostics, "receive error: %v\n", err)
+		}
+		return
+	}
+
+	fmt.Fprintln(diagnostics, "server closed connection")
 }

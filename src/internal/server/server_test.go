@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -53,7 +54,7 @@ func startTestServer(t *testing.T, config Config) (net.Listener, <-chan error, *
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(listener, config)
+		done <- Serve(context.Background(), listener, config)
 	}()
 
 	return listener, done, &diagnostics
@@ -322,7 +323,7 @@ func TestServeFailsBeforeAcceptingWithInvalidTLSConfiguration(t *testing.T) {
 	}
 	defer listener.Close()
 
-	err = Serve(listener, Config{
+	err = Serve(context.Background(), listener, Config{
 		UseTLS:   true,
 		CertFile: "does-not-exist-cert.pem",
 		KeyFile:  "does-not-exist-key.pem",
@@ -370,22 +371,22 @@ func TestServeForwardsCompressedClientOutput(t *testing.T) {
 }
 
 func TestServeBroadcastsCompressedInput(t *testing.T) {
-    inputReader, inputWriter := io.Pipe()
-    defer inputWriter.Close()
+	inputReader, inputWriter := io.Pipe()
+	defer inputWriter.Close()
 
-    listener, done, _ := startTestServer(t, Config{
-        AllowMultiple: true,
-        Secure:        false,
-        Compress:      true,
-        Input:         inputReader,
-    })
-    defer stopTestServer(t, listener, done)
+	listener, done, _ := startTestServer(t, Config{
+		AllowMultiple: true,
+		Secure:        false,
+		Compress:      true,
+		Input:         inputReader,
+	})
+	defer stopTestServer(t, listener, done)
 
-    rawClient := connectAndReadAdmissionWithCompression(t, listener.Addr().String(), true)
-    defer rawClient.Close()
+	rawClient := connectAndReadAdmissionWithCompression(t, listener.Addr().String(), true)
+	defer rawClient.Close()
 
-    client := connection.WrapWithCompression(rawClient)
-    defer client.Close()
+	client := connection.WrapWithCompression(rawClient)
+	defer client.Close()
 
 	const message = "compressed server message\n"
 	if _, err := io.WriteString(inputWriter, message); err != nil {
