@@ -121,7 +121,7 @@ cat input.bin | ./.bin/xfer server.example:9999 > output.bin
 For one exact file transfer, start the server without `-k` or `-m` and
 redirect its standard output to the destination file:
 ```sh
-xfer -l > received.bin
+./.bin/xfer -l > received.bin
 # Send the file from the client:
 ./.bin/xfer server.example:9999 < input.bin
 ```

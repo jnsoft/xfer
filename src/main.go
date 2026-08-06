@@ -88,11 +88,14 @@ func runInteractive(args []string) {
 
 	timeout := time.Duration(*flagTimeout) * time.Second
 
-	// setup interrupt handling to close cleanly
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	if *flagListen {
+		ctx, stop := signal.NotifyContext(
+			context.Background(),
+			syscall.SIGINT,
+			syscall.SIGTERM,
+		)
+		defer stop()
+
 		addr := fmt.Sprintf(":%d", *flagPort)
 
 		serverOutput := io.Writer(os.Stdout)
