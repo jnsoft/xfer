@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
+	"github.com/jnsoft/xfer/src/internal/filetransfer"
 )
 
 const (
@@ -33,6 +34,11 @@ type Config struct {
 	Input            io.Reader
 	Output           io.Writer
 	ErrorOutput      io.Writer
+}
+
+type FileConfig struct {
+	Server      Config
+	Destination string
 }
 
 func Run(ctx context.Context, config Config) error {
@@ -274,4 +280,68 @@ func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+func ReceiveFile(ctx context.Context, config FileConfig) error {
+	if config.Destination == "" {
+		return errors.New("destination path is required")
+	}
+	if config.Server.ErrorOutput == nil {
+		return errors.New("server error output is required")
+	}
+	if config.Server.UseTLS && config.Server.TLSConfig == nil {
+		return errors.New("TLS configuration is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	listener, err := net.Listen("tcp", config.Server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
+	fmt.Fprintf(config.Server.ErrorOutput, "listening on %s\n", listener.Addr())
+
+	conn, err := listener.Accept()
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	}
+	defer conn.Close()
+
+	if err := connection.SendAdmission(conn, true); err != nil {
+		return fmt.Errorf("send admission: %w", err)
+	}
+
+	useConn, err := prepareConnection(conn, config.Server)
+	if err != nil {
+		return fmt.Errorf("connection setup: %w", err)
+	}
+	defer useConn.Close()
+
+	compress, err := connection.NegotiateCapabilities(useConn, true, config.Server.Compress)
+	if err != nil {
+		return fmt.Errorf("protocol negotiation: %w", err)
+	}
+	if compress {
+		useConn = connection.WrapWithCompression(useConn)
+		defer useConn.Close()
+	}
+
+	connection.ApplyTimeout(useConn, config.Server.Timeout)
+
+	if err := filetransfer.Receive(useConn, config.Destination); err != nil {
+		return fmt.Errorf("receive file: %w", err)
+	}
+
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
+	"github.com/jnsoft/xfer/src/internal/filetransfer"
 )
 
 type Config struct {
@@ -24,6 +25,11 @@ type Config struct {
 	ErrorOutput io.Writer
 }
 
+type FileConfig struct {
+	Connection Config
+	SourcePath string
+}
+
 func RunClient(config Config) error {
 	if config.Input == nil {
 		return errors.New("client input is required")
@@ -35,52 +41,11 @@ func RunClient(config Config) error {
 		return errors.New("client error output is required")
 	}
 
-	conn, err := net.Dial("tcp", config.Target)
+	useConn, err := Connect(config)
 	if err != nil {
-		return fmt.Errorf("connect error: %w", err)
+		return err
 	}
-	defer conn.Close()
-
-	if err := connection.ReadAdmission(conn); err != nil {
-		if errors.Is(err, connection.ErrServerBusy) {
-			return fmt.Errorf("connect error: server is busy or full")
-		} else {
-			return fmt.Errorf("connect error: %w", err)
-		}
-	}
-
-	var useConn net.Conn = conn
-	if config.UseTLS {
-		tlsConfig := config.TLSConfig
-		if tlsConfig == nil {
-			return errors.New("TLS configuration is required")
-		}
-
-		tlsConn := tls.Client(conn, tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
-			return fmt.Errorf("TLS handshake: %w", err)
-		}
-		useConn = tlsConn
-		defer tlsConn.Close()
-	} else if config.Secure {
-		secureConn, err := connection.WrapWithAE(conn, false, config.Secret)
-		if err != nil {
-			return fmt.Errorf("handshake error: %w", err)
-		}
-		useConn = secureConn
-		defer secureConn.Close()
-	}
-
-	compress, err := connection.NegotiateCapabilities(useConn, false, config.Compress)
-	if err != nil {
-		return fmt.Errorf("protocol negotiation: %w", err)
-	}
-
-	if compress {
-		useConn = connection.WrapWithCompression(useConn)
-	}
-
-	connection.ApplyTimeout(useConn, config.Timeout)
+	defer useConn.Close()
 
 	receivedDone := make(chan struct{})
 
@@ -132,4 +97,65 @@ func copyServerOutput(output io.Writer, input io.Reader, diagnostics io.Writer) 
 	}
 
 	fmt.Fprintln(diagnostics, "server closed connection")
+}
+
+func Connect(config Config) (net.Conn, error) {
+	conn, err := net.Dial("tcp", config.Target)
+	if err != nil {
+		return nil, fmt.Errorf("connect error: %w", err)
+	}
+
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = conn.Close()
+		}
+	}()
+
+	if err := connection.ReadAdmission(conn); err != nil {
+		if errors.Is(err, connection.ErrServerBusy) {
+			return nil, errors.New("connect error: server is busy or full")
+		}
+		return nil, fmt.Errorf("connect error: %w", err)
+	}
+
+	var useConn net.Conn = conn
+	if config.UseTLS {
+		if config.TLSConfig == nil {
+			return nil, errors.New("TLS configuration is required")
+		}
+
+		tlsConn := tls.Client(conn, config.TLSConfig)
+		if err := tlsConn.Handshake(); err != nil {
+			return nil, fmt.Errorf("TLS handshake: %w", err)
+		}
+		useConn = tlsConn
+	} else if config.Secure {
+		secureConn, err := connection.WrapWithAE(conn, false, config.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("handshake error: %w", err)
+		}
+		useConn = secureConn
+	}
+
+	compress, err := connection.NegotiateCapabilities(useConn, false, config.Compress)
+	if err != nil {
+		return nil, fmt.Errorf("protocol negotiation: %w", err)
+	}
+	if compress {
+		useConn = connection.WrapWithCompression(useConn)
+	}
+
+	connection.ApplyTimeout(useConn, config.Timeout)
+	closeOnError = false
+	return useConn, nil
+}
+
+func SendFile(config FileConfig) error {
+	conn, err := Connect(config.Connection)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return filetransfer.Send(conn, config.SourcePath)
 }
