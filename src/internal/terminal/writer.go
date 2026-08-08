@@ -16,22 +16,27 @@ func NewWriter(writer io.Writer) *Writer {
 }
 
 func (w *Writer) Write(data []byte) (int, error) {
-    w.mu.Lock()
-    defer w.mu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-    for _, value := range data {
-        if value == '\n' || value == '\r' || value == '\t' ||
-            (value >= 0x20 && value <= 0x7e) {
-            if _, err := w.writer.Write([]byte{value}); err != nil {
-                return 0, err
-            }
-            continue
-        }
+	written := 0
+	var single [1]byte
+	for _, value := range data {
+		if value == '\n' || value == '\r' || value == '\t' ||
+			(value >= 0x20 && value <= 0x7e) {
+			single[0] = value
+			if _, err := w.writer.Write(single[:]); err != nil {
+				return written, err
+			}
+			written++
+			continue
+		}
 
-        if _, err := fmt.Fprintf(w.writer, "\\x%02X", value); err != nil {
-            return 0, err
-        }
-    }
+		if _, err := fmt.Fprintf(w.writer, "\\x%02X", value); err != nil {
+			return written, err
+		}
+		written++
+	}
 
-    return len(data), nil
+	return written, nil
 }
