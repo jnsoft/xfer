@@ -1,4 +1,4 @@
-package helpers
+package auth
 
 import (
 	"bytes"
@@ -80,39 +80,4 @@ func GetHkdfKey(secret, salt, info []byte, keyLen int) ([]byte, error) {
 	return key, nil
 }
 
-func ComputeAuth_old(authKey, shared []byte) []byte {
-	salt := sha256.Sum256(shared)
-	// Argon2id parameters — tune based on your environment. Current values are reasonable for servers:
-	//   time = 3 iterations, memory = 64 MB, threads = 2, keyLen = 32 bytes
-	// If you need faster or lower-memory operation (e.g. constrained devices), reduce memory/time.
-	derived := argon2.IDKey(authKey, salt[:], 3, 64*1024, 2, 32)
-	mac := hmac.New(sha256.New, derived)
-	mac.Write([]byte("xfer-v1 handshake"))
-	mac.Write(shared)
-	return mac.Sum(nil)
-}
 
-func ReadBytesWithLen(r io.Reader) ([]byte, error) {
-	var l uint16
-	if err := binary.Read(r, binary.BigEndian, &l); err != nil {
-		return nil, err
-	}
-	if l == 0 {
-		return nil, nil
-	}
-	buf := make([]byte, int(l))
-	_, err := io.ReadFull(r, buf)
-	return buf, err
-}
-
-func WriteBytesWithLen(w io.Writer, b []byte) error {
-	if len(b) > 0xFFFF {
-		return errors.New("message too long")
-	}
-	l := uint16(len(b))
-	if err := binary.Write(w, binary.BigEndian, l); err != nil {
-		return err
-	}
-	_, err := w.Write(b)
-	return err
-}

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jnsoft/xfer/src/internal/helpers"
+	"github.com/jnsoft/xfer/src/auth"
 )
 
 const (
@@ -66,19 +66,19 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 	var peerPubBytes []byte
 	if isServer {
 		// server reads peer pubkey first, then sends its pubkey
-		peerPubBytes, err = helpers.ReadBytesWithLen(conn)
+		peerPubBytes, err = readBytesWithLen(conn)
 		if err != nil {
 			return nil, err
 		}
-		if err := helpers.WriteBytesWithLen(conn, pubBytes); err != nil {
+		if err := writeBytesWithLen(conn, pubBytes); err != nil {
 			return nil, err
 		}
 	} else {
 		// client writes first, then reads
-		if err := helpers.WriteBytesWithLen(conn, pubBytes); err != nil {
+		if err := writeBytesWithLen(conn, pubBytes); err != nil {
 			return nil, err
 		}
-		peerPubBytes, err = helpers.ReadBytesWithLen(conn)
+		peerPubBytes, err = readBytesWithLen(conn)
 		if err != nil {
 			return nil, err
 		}
@@ -98,28 +98,28 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 	// if authKey provided, perform an authentication exchange to prevent MITM.
 	// client sends auth first, server reads and verifies then responds.
 	if authKey != "" {
-		auth, err := helpers.ComputeAuth([]byte(authKey), shared, pubBytes, peerPubBytes)
+		auth, err := auth.ComputeAuth([]byte(authKey), shared, pubBytes, peerPubBytes)
 		if err != nil {
 			return nil, err
 		}
 		if isServer {
 			// server: read client's auth, verify, then send its auth
-			peerAuth, err := helpers.ReadBytesWithLen(conn)
+			peerAuth, err := readBytesWithLen(conn)
 			if err != nil {
 				return nil, err
 			}
 			if !hmac.Equal(peerAuth, auth) {
 				return nil, errors.New("handshake authentication failed")
 			}
-			if err := helpers.WriteBytesWithLen(conn, auth); err != nil {
+			if err := writeBytesWithLen(conn, auth); err != nil {
 				return nil, err
 			}
 		} else {
 			// client: send auth, read server's auth and verify
-			if err := helpers.WriteBytesWithLen(conn, auth); err != nil {
+			if err := writeBytesWithLen(conn, auth); err != nil {
 				return nil, err
 			}
-			peerAuth, err := helpers.ReadBytesWithLen(conn)
+			peerAuth, err := readBytesWithLen(conn)
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +134,7 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 	if authKey != "" {
 		salt = []byte(authKey)
 	}
-	key, err := helpers.GetHkdfKey(shared, salt, []byte("xfer-v1 key"), 32)
+	key, err := auth.GetHkdfKey(shared, salt, []byte("xfer-v1 key"), 32)
 	if err != nil {
 		return nil, err
 	}
@@ -227,4 +227,29 @@ func (s *SecureConn) CloseWrite() error {
 		return tcp.CloseWrite()
 	}
 	return errors.New("underlying conn does not support CloseWrite")
+}
+
+func readBytesWithLen(r io.Reader) ([]byte, error) {
+	var l uint16
+	if err := binary.Read(r, binary.BigEndian, &l); err != nil {
+		return nil, err
+	}
+	if l == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, int(l))
+	_, err := io.ReadFull(r, buf)
+	return buf, err
+}
+
+func writeBytesWithLen(w io.Writer, b []byte) error {
+	if len(b) > 0xFFFF {
+		return errors.New("message too long")
+	}
+	l := uint16(len(b))
+	if err := binary.Write(w, binary.BigEndian, l); err != nil {
+		return err
+	}
+	_, err := w.Write(b)
+	return err
 }

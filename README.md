@@ -4,7 +4,7 @@ It supports plaintext TCP, a custom ECDH P-256 plus AES-256-GCM transport, and T
 
 ## Run
 ```sh
-go run  ./src/main.go
+go run  ./src/cmd/xfer/main.go
 ```
 
 ## Test
@@ -22,10 +22,10 @@ go test -v ./...
 ## Build
 ```sh
 #linux
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o .bin/xfer ./src/main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o .bin/xfer ./src/cmd/xfer/main.go
 
 #win
-GOOS=windows GOARCH=amd64 go build -o .bin/xfer-windows-amd64.exe ./src/main.go
+GOOS=windows GOARCH=amd64 go build -o .bin/xfer-windows-amd64.exe ./src/cmd/xfer/main.go
 ```
 
 ## Usage
