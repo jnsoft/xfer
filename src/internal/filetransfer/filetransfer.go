@@ -156,8 +156,17 @@ func writeHeader(writer io.Writer, header Header) error {
 	binary.BigEndian.PutUint64(message[11:19], header.Size)
 	copy(message[19:51], header.SHA256[:])
 	copy(message[51:], header.Name)
-	_, err := writer.Write(message)
-	return err
+	for len(message) > 0 {
+		count, err := writer.Write(message)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return io.ErrShortWrite
+		}
+		message = message[count:]
+	}
+	return nil
 }
 
 func readHeader(reader io.Reader) (Header, error) {
