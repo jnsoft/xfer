@@ -218,8 +218,17 @@ func writeAck(writer io.Writer, transferErr error) error {
 	ack[8] = status
 	binary.BigEndian.PutUint16(ack[9:11], uint16(len(message)))
 	copy(ack[11:], message)
-	_, err := writer.Write(ack)
-	return err
+	for len(ack) > 0 {
+		count, err := writer.Write(ack)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return io.ErrShortWrite
+		}
+		ack = ack[count:]
+	}
+	return nil
 }
 
 func readAck(reader io.Reader) error {
