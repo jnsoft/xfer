@@ -102,8 +102,8 @@ The client verifies the certificate chain and that its SAN matches the supplied 
 -addext "subjectAltName=IP:127.0.0.1"
 ```
 
-## Redirects and pipeing
-Standard input and output can  be redirected or piped in interactive mode:
+## Redirects and piping
+Standard input and output can be redirected or piped in interactive mode:
 ```sh
 # client sends file:
 ./.bin/xfer < input.bin

@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-
 func HandleConn(conn net.Conn, output, errorOutput io.Writer, timeout time.Duration) {
 	defer conn.Close()
 	ApplyTimeout(conn, timeout)
@@ -23,8 +22,8 @@ func HandleConn(conn net.Conn, output, errorOutput io.Writer, timeout time.Durat
 }
 
 func ApplyTimeout(conn net.Conn, timeout time.Duration) {
-    if timeout <= 0 {
-        return
-    }
-    _ = conn.SetDeadline(time.Now().Add(timeout))
+	if timeout <= 0 {
+		return
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 }
