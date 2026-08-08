@@ -8,15 +8,19 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/helpers"
+)
+
+const (
+	maxPlaintextSize = 32 * 1024
+	maxFrameSize     = maxPlaintextSize + 12 + 16 // GCM nonce + authentication tag
+	maxChunk         = maxPlaintextSize
 )
 
 type SecureConn struct {
@@ -91,13 +95,10 @@ func performECDHHandshake(conn net.Conn, isServer bool, authKey string) (cipher.
 		return nil, err
 	}
 
-	fmt.Println("Shared key: ", hex.EncodeToString(shared)[0:8]+"...") // for debugging
-
 	// if authKey provided, perform an authentication exchange to prevent MITM.
 	// client sends auth first, server reads and verifies then responds.
 	if authKey != "" {
 		auth, err := helpers.ComputeAuth([]byte(authKey), shared, pubBytes, peerPubBytes)
-		fmt.Println("auth: ", hex.EncodeToString(auth)[0:8]+"...") // for debugging
 		if err != nil {
 			return nil, err
 		}
@@ -164,8 +165,9 @@ func (s *SecureConn) Read(p []byte) (int, error) {
 	if err := binary.Read(s.conn, binary.BigEndian, &l); err != nil {
 		return 0, err
 	}
-	if l < uint32(s.aead.NonceSize()) {
-		return 0, errors.New("invalid frame")
+	if l < uint32(s.aead.NonceSize()+s.aead.Overhead()) ||
+		l > uint32(maxFrameSize) {
+		return 0, errors.New("invalid frame size")
 	}
 	frame := make([]byte, int(l))
 	if _, err := io.ReadFull(s.conn, frame); err != nil {
@@ -188,7 +190,6 @@ func (s *SecureConn) Write(p []byte) (int, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 
-	const maxChunk = 32 * 1024 // 32KB plaintext per frame
 	total := 0
 	for len(p) > 0 {
 		chunk := p

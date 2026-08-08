@@ -1,78 +1,82 @@
 package server
 
 import (
-	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/jnsoft/xfer/src/internal/connection"
+	"github.com/jnsoft/xfer/src/internal/filetransfer"
 )
 
 const (
-	maxInputLine            = 1024 * 1024
+	bufferSize              = 32 * 1024
 	defaultHandshakeTimeout = 10 * time.Second
 )
 
 type Config struct {
+	Addr             string
 	KeepListening    bool
 	AllowMultiple    bool
 	MaxClients       int
-	Timeout          int
+	Timeout          time.Duration
 	Secure           bool
 	UseTLS           bool
+	Compress         bool
 	Secret           string
-	CertFile         string
-	KeyFile          string
 	HandshakeTimeout time.Duration
-	tlsConfig        *tls.Config
+	TLSConfig        *tls.Config
 	Input            io.Reader
 	Output           io.Writer
 	ErrorOutput      io.Writer
 }
 
-func RunServer(
-	addr string,
-	keep, allowMultiple bool,
-	maxClients, timeout int,
-	secure, useTLS bool,
-	secret, certFile, keyFile string,
-) {
-	listener, err := net.Listen("tcp", addr)
+type FileConfig struct {
+	Server      Config
+	Destination string
+}
+
+func Run(ctx context.Context, config Config) error {
+	if config.Input == nil {
+		return errors.New("server input is required")
+	}
+	if config.Output == nil {
+		return errors.New("server output is required")
+	}
+	if config.ErrorOutput == nil {
+		return errors.New("server error output is required")
+	}
+
+	listener, err := net.Listen("tcp", config.Addr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
-		os.Exit(2)
+		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
 
-	err = Serve(listener, Config{
-		KeepListening:    keep,
-		AllowMultiple:    allowMultiple,
-		MaxClients:       maxClients,
-		Timeout:          timeout,
-		Secure:           secure,
-		UseTLS:           useTLS,
-		Secret:           secret,
-		CertFile:         certFile,
-		KeyFile:          keyFile,
-		HandshakeTimeout: defaultHandshakeTimeout,
-		Input:            os.Stdin,
-		Output:           os.Stdout,
-		ErrorOutput:      os.Stderr,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(2)
-	}
+	return Serve(ctx, listener, config)
 }
 
-func Serve(listener net.Listener, config Config) error {
+func Serve(ctx context.Context, listener net.Listener, config Config) error {
+	if config.Input == nil {
+		return errors.New("server input is required")
+	}
+	if config.Output == nil {
+		return errors.New("server output is required")
+	}
+	if config.ErrorOutput == nil {
+		return errors.New("server error output is required")
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	maxClients := config.MaxClients
 	if maxClients <= 0 {
@@ -82,37 +86,39 @@ func Serve(listener net.Listener, config Config) error {
 		maxClients = 1
 	}
 
-	input := config.Input
-	if input == nil {
-		input = strings.NewReader("")
+	if config.UseTLS && config.TLSConfig == nil {
+		return errors.New("TLS configuration is required")
 	}
 
-	output := config.Output
-	if output == nil {
-		output = io.Discard
-	}
-
-	errorOutput := config.ErrorOutput
-	if errorOutput == nil {
-		errorOutput = io.Discard
-	}
-
-	if config.UseTLS {
-		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
-		if err != nil {
-			return fmt.Errorf("load TLS certificate and key: %w", err)
-		}
-
-		config.tlsConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS13,
-		}
-	}
-
-	fmt.Fprintf(errorOutput, "listening on %s\n", listener.Addr())
+	fmt.Fprintf(config.ErrorOutput, "listening on %s\n", listener.Addr())
 
 	var clientsMu sync.RWMutex
 	clients := make(map[net.Conn]struct{})
+
+	var clientsWG sync.WaitGroup
+
+	closeClients := func() {
+		clientsMu.RLock()
+		currentClients := make([]net.Conn, 0, len(clients))
+		for clientConn := range clients {
+			currentClients = append(currentClients, clientConn)
+		}
+		clientsMu.RUnlock()
+
+		for _, clientConn := range currentClients {
+			_ = clientConn.Close()
+		}
+	}
+
+	go func() {
+		<-serveCtx.Done()
+		_ = listener.Close()
+	}()
+
+	go func() {
+		<-serveCtx.Done()
+		closeClients()
+	}()
 
 	var clientsCountMu sync.Mutex
 	connectedClients := 0
@@ -138,36 +144,35 @@ func Serve(listener net.Listener, config Config) error {
 	// Only this goroutine reads server input. It broadcasts complete lines to
 	// all currently connected clients.
 	go func() {
-		scanner := bufio.NewScanner(input)
-		scanner.Buffer(make([]byte, 64*1024), maxInputLine)
+		buffer := make([]byte, bufferSize)
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			byteCount, err := config.Input.Read(buffer)
+			if byteCount > 0 {
+				clientsMu.RLock()
+				currentClients := make([]net.Conn, 0, len(clients))
+				for clientConn := range clients {
+					currentClients = append(currentClients, clientConn)
+				}
+				clientsMu.RUnlock()
 
-			clientsMu.RLock()
-			currentClients := make([]net.Conn, 0, len(clients))
-			for clientConn := range clients {
-				currentClients = append(currentClients, clientConn)
-			}
-			clientsMu.RUnlock()
-
-			if len(currentClients) == 0 {
-				fmt.Fprintln(errorOutput, "no clients connected")
-				continue
-			}
-
-			for _, clientConn := range currentClients {
-				if _, err := fmt.Fprintln(clientConn, line); err != nil {
-					if !errors.Is(err, net.ErrClosed) {
-						fmt.Fprintf(errorOutput, "send error to %s: %v\n", clientConn.RemoteAddr(), err)
+				for _, clientConn := range currentClients {
+					if _, writeErr := clientConn.Write(buffer[:byteCount]); writeErr != nil {
+						if !errors.Is(writeErr, net.ErrClosed) {
+							fmt.Fprintf(config.ErrorOutput, "send error to %s: %v\n", clientConn.RemoteAddr(), writeErr)
+						}
+						_ = clientConn.Close()
 					}
-					_ = clientConn.Close()
 				}
 			}
-		}
 
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(errorOutput, "stdin error: %v\n", err)
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				fmt.Fprintf(config.ErrorOutput, "stdin error: %v\n", err)
+				return
+			}
 		}
 	}()
 
@@ -176,21 +181,31 @@ func Serve(listener net.Listener, config Config) error {
 		defer releaseClient()
 
 		if err := connection.SendAdmission(conn, true); err != nil {
-			fmt.Fprintf(errorOutput, "admission write error to %s: %v\n", conn.RemoteAddr(), err)
+			fmt.Fprintf(config.ErrorOutput, "admission write error to %s: %v\n", conn.RemoteAddr(), err)
 			return
 		}
 
 		useConn, err := prepareConnection(conn, config)
 		if err != nil {
-			fmt.Fprintf(errorOutput, "connection setup error from %s: %v\n", conn.RemoteAddr(), err)
+			fmt.Fprintf(config.ErrorOutput, "connection setup error from %s: %v\n", conn.RemoteAddr(), err)
 			return
+		}
+
+		compress, err := connection.NegotiateCapabilities(useConn, true, config.Compress)
+		if err != nil {
+			fmt.Fprintf(config.ErrorOutput, "protocol negotiation error from %s: %v\n", conn.RemoteAddr(), err)
+			return
+		}
+
+		if compress {
+			useConn = connection.WrapWithCompression(useConn)
 		}
 
 		clientsMu.Lock()
 		clients[useConn] = struct{}{}
 		clientsMu.Unlock()
 
-		connection.HandleConn(useConn, output, config.Timeout)
+		connection.HandleConn(useConn, config.Output, config.ErrorOutput, config.Timeout)
 
 		clientsMu.Lock()
 		delete(clients, useConn)
@@ -200,14 +215,18 @@ func Serve(listener net.Listener, config Config) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				clientsWG.Wait()
+				return nil
+			}
 			return err
 		}
 
-		fmt.Fprintf(errorOutput, "connection attempt from %s\n", conn.RemoteAddr())
+		fmt.Fprintf(config.ErrorOutput, "connection attempt from %s\n", conn.RemoteAddr())
 
 		if !tryReserveClient() {
 			fmt.Fprintf(
-				errorOutput,
+				config.ErrorOutput,
 				"connection rejected from %s: server is full (maximum %d clients)\n",
 				conn.RemoteAddr(),
 				maxClients,
@@ -218,7 +237,11 @@ func Serve(listener net.Listener, config Config) error {
 		}
 
 		if config.AllowMultiple || config.KeepListening {
-			go handleClient(conn)
+			clientsWG.Add(1)
+			go func() {
+				defer clientsWG.Done()
+				handleClient(conn)
+			}()
 			continue
 		}
 
@@ -241,16 +264,10 @@ func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
 	}
 
 	if config.UseTLS {
-		if config.tlsConfig == nil {
-			return nil, errors.New("TLS configuration is not initialized")
-		}
-
-		tlsConn := tls.Server(conn, config.tlsConfig)
-
+		tlsConn := tls.Server(conn, config.TLSConfig)
 		if err := tlsConn.Handshake(); err != nil {
 			return nil, fmt.Errorf("TLS handshake: %w", err)
 		}
-
 		return tlsConn, nil
 	}
 
@@ -263,4 +280,68 @@ func prepareConnection(conn net.Conn, config Config) (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+func ReceiveFile(ctx context.Context, config FileConfig) error {
+	if config.Destination == "" {
+		return errors.New("destination path is required")
+	}
+	if config.Server.ErrorOutput == nil {
+		return errors.New("server error output is required")
+	}
+	if config.Server.UseTLS && config.Server.TLSConfig == nil {
+		return errors.New("TLS configuration is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	listener, err := net.Listen("tcp", config.Server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
+	fmt.Fprintf(config.Server.ErrorOutput, "listening on %s\n", listener.Addr())
+
+	conn, err := listener.Accept()
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	}
+	defer conn.Close()
+
+	if err := connection.SendAdmission(conn, true); err != nil {
+		return fmt.Errorf("send admission: %w", err)
+	}
+
+	useConn, err := prepareConnection(conn, config.Server)
+	if err != nil {
+		return fmt.Errorf("connection setup: %w", err)
+	}
+	defer useConn.Close()
+
+	compress, err := connection.NegotiateCapabilities(useConn, true, config.Server.Compress)
+	if err != nil {
+		return fmt.Errorf("protocol negotiation: %w", err)
+	}
+	if compress {
+		useConn = connection.WrapWithCompression(useConn)
+		defer useConn.Close()
+	}
+
+	connection.ApplyTimeout(useConn, config.Server.Timeout)
+
+	if err := filetransfer.Receive(useConn, config.Destination); err != nil {
+		return fmt.Errorf("receive file: %w", err)
+	}
+
+	return nil
 }
