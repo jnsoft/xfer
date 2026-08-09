@@ -26,10 +26,10 @@ func main() {
 		case "get":
 			receiveFile(os.Args[2:])
 			return
+		default:
+			runInteractive(os.Args[1:])
 		}
 	}
-
-	runInteractive(os.Args[1:])
 }
 
 func runInteractive(args []string) {

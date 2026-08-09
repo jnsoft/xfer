@@ -129,7 +129,7 @@ redirect its standard output to the destination file:
 ## File transfer
 Receiver: listen on port 9999 and save the verified file.
 ```sh
-./.bin/xfer receive received.iso
+./.bin/xfer get received.iso
 ```
 
 Sender: connect and send one file.
