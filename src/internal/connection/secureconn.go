@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jnsoft/xfer/src/auth"
+	"github.com/jnsoft/xfer/src/internal/auth"
 )
 
 const (

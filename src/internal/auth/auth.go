@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/binary"
-	"errors"
 	"io"
 
 	"golang.org/x/crypto/argon2"
@@ -79,5 +77,3 @@ func GetHkdfKey(secret, salt, info []byte, keyLen int) ([]byte, error) {
 	}
 	return key, nil
 }
-
-

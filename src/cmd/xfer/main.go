@@ -3,12 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,38 +13,18 @@ import (
 	"github.com/jnsoft/xfer/src/internal/client"
 	"github.com/jnsoft/xfer/src/internal/server"
 	"github.com/jnsoft/xfer/src/internal/terminal"
+	"github.com/jnsoft/xfer/src/internal/tlsconfig"
 	"golang.org/x/term"
-)
-
-const (
-	maxClients     = 1024
-	defaultAddress = "127.0.0.1" // if no host:port provided, use localhost:port
-)
-
-var (
-	flagListen   = flag.Bool("l", false, "listen mode (server)")
-	flagKeep     = flag.Bool("k", false, "keep listening after a connection closes (server)")
-	flagMulti    = flag.Bool("m", false, "allow simultaneous clients; broadcast server input (server)")
-	flagPort     = flag.Int("p", 9999, "port to listen on or connect to")
-	flagTimeout  = flag.Int("t", 0, "I/O timeout seconds (0 = no timeout)")
-	flagSecure   = flag.Bool("s", true, "use secure AES-256-GCM + ECDH transport")
-	flagAuth     = flag.String("a", "", "optional pre-shared key to authenticate the handshake (mitm protection)")
-	flagTLS      = flag.Bool("tls", false, "use TLS 1.3 transport")
-	flagCert     = flag.String("cert", "", "TLS certificate file (required for TLS)")
-	flagKey      = flag.String("key", "", "TLS private key file (server, required for TLS)")
-	flagCompress = flag.Bool("c", false, "compress data before transport")
-	flagZeroIO   = flag.Bool("z", false, "check whether a TCP port is reachable")
-	flagHelp     = flag.Bool("h", false, "show help")
 )
 
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "send":
-			runSend(os.Args[2:])
+			sendFile(os.Args[2:])
 			return
-		case "receive":
-			runReceive(os.Args[2:])
+		case "get":
+			receiveFile(os.Args[2:])
 			return
 		}
 	}
@@ -57,38 +33,34 @@ func main() {
 }
 
 func runInteractive(args []string) {
-	flag.CommandLine.Parse(args)
-	if *flagHelp {
-		usage()
-		return
-	}
-
-	target := ""
-	if flag.NArg() > 0 {
-		target = flag.Arg(0)
-	} else {
-		target = fmt.Sprintf("%s:%d", defaultAddress, *flagPort)
-	}
-
-	var (
-		clientTLSConfig *tls.Config
-		serverTLSConfig *tls.Config
-		err             error
-	)
-
-	if *flagListen {
-		serverTLSConfig, err = loadServerTLSConfig()
-	} else {
-		clientTLSConfig, err = loadClientTLSConfig(target)
-	}
+	options, positional, err := parseOptions(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
-	timeout := time.Duration(*flagTimeout) * time.Second
+	if options.Help {
+		usage()
+		return
+	}
 
-	if *flagListen {
+	if options.Listen {
+		if len(positional) != 0 {
+			fmt.Fprintln(os.Stderr, "Usage: xfer -l [options]")
+			os.Exit(2)
+		}
+
+		var tlsConfig *tls.Config
+		if options.TLS {
+			tlsConfig, err = tlsconfig.LoadServerTLSConfig(
+				options.CertFile, options.KeyFile,
+			)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		}
+
 		ctx, stop := signal.NotifyContext(
 			context.Background(),
 			syscall.SIGINT,
@@ -96,202 +68,79 @@ func runInteractive(args []string) {
 		)
 		defer stop()
 
-		addr := fmt.Sprintf(":%d", *flagPort)
-
 		serverOutput := io.Writer(os.Stdout)
 
 		if term.IsTerminal(int(os.Stdout.Fd())) {
 			serverOutput = terminal.NewWriter(os.Stdout)
 		}
-		err := server.Run(ctx, server.Config{
-			Addr:          addr,
-			KeepListening: *flagKeep,
-			AllowMultiple: *flagMulti,
-			MaxClients:    maxClients,
-			Timeout:       timeout,
-			Secure:        *flagSecure,
-			UseTLS:        *flagTLS,
-			Compress:      *flagCompress,
-			Secret:        *flagAuth,
-			TLSConfig:     serverTLSConfig,
-			Input:         os.Stdin,
-			Output:        serverOutput,
-			ErrorOutput:   os.Stderr,
-		})
-		if err != nil {
+
+		serverConfig := options.serverConfig()
+		serverConfig.TLSConfig = tlsConfig
+		serverConfig.Input = os.Stdin
+		serverConfig.Output = serverOutput
+		serverConfig.ErrorOutput = os.Stderr
+
+		if err := server.Run(ctx, serverConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(2)
 		}
 		return
 	}
 
-	if *flagZeroIO {
-		timeout := 5 * time.Second
-		if *flagTimeout > 0 {
-			timeout = time.Duration(*flagTimeout) * time.Second
+	target, err := options.target(positional)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	if options.ZeroIO {
+		if len(positional) != 1 {
+			fmt.Fprintln(os.Stderr, "Usage: xfer -z [options] <host:port>")
+			os.Exit(2)
 		}
+		testConnection(positional[0], options.Timeout)
+		return
+	}
 
-		if err := client.CheckPort(target, timeout); err != nil {
-			fmt.Fprintf(os.Stderr, "%s: connection failed: %v\n", target, err)
-			os.Exit(1)
+	var tlsConfig *tls.Config
+	if options.TLS {
+		tlsConfig, err = tlsconfig.LoadClientTLSConfig(options.CertFile, target)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
 		}
-
-		fmt.Fprintf(os.Stderr, "%s: connection succeeded\n", target)
-		return
 	}
 
-	if err := client.RunClient(client.Config{
-		Target:      target,
-		Timeout:     timeout,
-		Secure:      *flagSecure,
-		UseTLS:      *flagTLS,
-		Compress:    *flagCompress,
-		Secret:      *flagAuth,
-		TLSConfig:   clientTLSConfig,
-		Input:       os.Stdin,
-		Output:      os.Stdout,
-		ErrorOutput: os.Stderr,
-	}); err != nil {
+	config := options.clientConfig(target)
+	config.TLSConfig = tlsConfig
+	config.Input = os.Stdin
+	config.Output = os.Stdout
+	config.ErrorOutput = os.Stderr
+
+	if err := client.RunClient(config); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 }
 
-func runSend(args []string) {
-	if err := flag.CommandLine.Parse(args); err != nil {
-		os.Exit(2)
-	}
-	if *flagHelp {
-		usage()
-		return
-	}
-	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "Usage: xfer send [options] <source-file> <host:port>")
-		os.Exit(2)
+func testConnection(target string, timeout time.Duration) {
+	if timeout == 0 {
+		timeout = 5 * time.Second
 	}
 
-	sourcePath := flag.Arg(0)
-	target := flag.Arg(1)
-	clientTLSConfig, err := loadClientTLSConfig(target)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	if err := client.CheckPort(target, timeout); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: connection failed: %v\n", target, err)
+		os.Exit(1)
 	}
 
-	timeout := time.Duration(*flagTimeout) * time.Second
-	if err := client.SendFile(client.FileConfig{
-		Connection: client.Config{
-			Target:    target,
-			Timeout:   timeout,
-			Secure:    *flagSecure,
-			UseTLS:    *flagTLS,
-			Compress:  *flagCompress,
-			Secret:    *flagAuth,
-			TLSConfig: clientTLSConfig,
-		},
-		SourcePath: sourcePath,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
-		os.Exit(2)
-	}
-}
-
-func runReceive(args []string) {
-	if err := flag.CommandLine.Parse(args); err != nil {
-		os.Exit(2)
-	}
-	if *flagHelp {
-		usage()
-		return
-	}
-	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: xfer receive [options] <destination-file>")
-		os.Exit(2)
-	}
-
-	serverTLSConfig, err := loadServerTLSConfig()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	timeout := time.Duration(*flagTimeout) * time.Second
-	err = server.ReceiveFile(ctx, server.FileConfig{
-		Server: server.Config{
-			Addr:        fmt.Sprintf(":%d", *flagPort),
-			Timeout:     timeout,
-			Secure:      *flagSecure,
-			UseTLS:      *flagTLS,
-			Compress:    *flagCompress,
-			Secret:      *flagAuth,
-			TLSConfig:   serverTLSConfig,
-			ErrorOutput: os.Stderr,
-		},
-		Destination: flag.Arg(0),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "receive failed: %v\n", err)
-		os.Exit(2)
-	}
-}
-
-func loadClientTLSConfig(target string) (*tls.Config, error) {
-	if !*flagTLS {
-		return nil, nil
-	}
-	if *flagCert == "" {
-		return nil, errors.New("-cert is required when using -tls")
-	}
-
-	certificatePEM, err := os.ReadFile(*flagCert)
-	if err != nil {
-		return nil, fmt.Errorf("read TLS certificate: %w", err)
-	}
-
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(certificatePEM) {
-		return nil, errors.New("parse TLS certificate: no certificates found")
-	}
-
-	host, _, err := net.SplitHostPort(target)
-	if err != nil {
-		return nil, fmt.Errorf("invalid server address %q: %w", target, err)
-	}
-
-	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		ServerName: host,
-		RootCAs:    roots,
-	}, nil
-}
-
-func loadServerTLSConfig() (*tls.Config, error) {
-	if !*flagTLS {
-		return nil, nil
-	}
-	if *flagCert == "" || *flagKey == "" {
-		return nil, errors.New("-cert and -key are required when using -tls")
-	}
-
-	certificate, err := tls.LoadX509KeyPair(*flagCert, *flagKey)
-	if err != nil {
-		return nil, fmt.Errorf("load TLS certificate and key: %w", err)
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{certificate},
-		MinVersion:   tls.VersionTLS13,
-	}, nil
+	fmt.Fprintf(os.Stderr, "%s: connection succeeded\n", target)
 }
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   %s [options] [host:port]
   %s send [options] <source-file> <host:port>
-  %s receive [options] <destination-file>
+  %s get [options] <destination-file>
   %s -l [options]
 
 Modes:
@@ -350,7 +199,7 @@ Examples:
   %s -tls -cert cert.pem localhost:9999
 
   # Receive one verified file, then exit.
-  %s receive -c received.iso
+  %s get -c received.iso
 
   # Send a file.
   %s send -c source.iso example.com:9999

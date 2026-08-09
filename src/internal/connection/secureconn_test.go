@@ -1,6 +1,7 @@
 package connection
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
@@ -229,5 +230,22 @@ func TestSecureConnRejectsOversizedFrame(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid frame size") {
 		t.Fatalf("Read() error = %v, want invalid frame size", err)
+	}
+}
+
+func TestWriteReadBytesWithLen(t *testing.T) {
+	buf := &bytes.Buffer{}
+	data := []byte("hello world")
+
+	if err := writeBytesWithLen(buf, data); err != nil {
+		t.Fatalf("WriteBytesWithLen error: %v", err)
+	}
+
+	got, err := readBytesWithLen(buf)
+	if err != nil {
+		t.Fatalf("ReadBytesWithLen error: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("mismatch: got %q want %q", got, data)
 	}
 }
