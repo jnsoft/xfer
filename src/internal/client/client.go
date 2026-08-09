@@ -41,7 +41,7 @@ func RunClient(config Config) error {
 		return errors.New("client error output is required")
 	}
 
-	useConn, err := Connect(config)
+	useConn, err := connect(config)
 	if err != nil {
 		return err
 	}
@@ -53,10 +53,10 @@ func RunClient(config Config) error {
 	go func() {
 		if _, err := io.Copy(useConn, config.Input); err != nil &&
 			!errors.Is(err, net.ErrClosed) {
-			fmt.Fprintf(config.ErrorOutput, "send error: %v\n", err)
-			_ = useConn.Close()
-			return
-		}
+				fmt.Fprintf(config.ErrorOutput, "send error: %v\n", err)
+				_ = useConn.Close()
+				return
+			}
 
 		if closeWriter, ok := useConn.(interface{ CloseWrite() error }); ok {
 			_ = closeWriter.CloseWrite()
@@ -83,23 +83,16 @@ func CheckPort(target string, timeout time.Duration) error {
 	return conn.Close()
 }
 
-func copyServerOutput(output io.Writer, input io.Reader, diagnostics io.Writer) {
-	if _, err := io.Copy(output, input); err != nil {
-		switch {
-		case errors.Is(err, net.ErrClosed):
-			fmt.Fprintln(diagnostics, "server closed connection")
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			fmt.Fprintln(diagnostics, "server closed connection unexpectedly")
-		default:
-			fmt.Fprintf(diagnostics, "receive error: %v\n", err)
-		}
-		return
+func SendFile(config FileConfig) error {
+	conn, err := connect(config.Connection)
+	if err != nil {
+		return err
 	}
-
-	fmt.Fprintln(diagnostics, "server closed connection")
+	defer conn.Close()
+	return filetransfer.Send(conn, config.SourcePath)
 }
 
-func Connect(config Config) (net.Conn, error) {
+func connect(config Config) (net.Conn, error) {
 	conn, err := net.Dial("tcp", config.Target)
 	if err != nil {
 		return nil, fmt.Errorf("connect error: %w", err)
@@ -151,11 +144,18 @@ func Connect(config Config) (net.Conn, error) {
 	return useConn, nil
 }
 
-func SendFile(config FileConfig) error {
-	conn, err := Connect(config.Connection)
-	if err != nil {
-		return err
+func copyServerOutput(output io.Writer, input io.Reader, diagnostics io.Writer) {
+	if _, err := io.Copy(output, input); err != nil {
+		switch {
+		case errors.Is(err, net.ErrClosed):
+			fmt.Fprintln(diagnostics, "server closed connection")
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			fmt.Fprintln(diagnostics, "server closed connection unexpectedly")
+		default:
+			fmt.Fprintf(diagnostics, "receive error: %v\n", err)
+		}
+		return
 	}
-	defer conn.Close()
-	return filetransfer.Send(conn, config.SourcePath)
+
+	fmt.Fprintln(diagnostics, "server closed connection")
 }
